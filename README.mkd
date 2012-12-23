@@ -1,5 +1,15 @@
 # SublimeBoo
 
+Sublime Text 2 plugin to support the Boo language with auto completion.
+
+## Features
+
+Interfaces with BooJs compiler to offer compiler assisted auto completion hints.
+
+  - Global/Imported symbols
+  - Local symbols (ie: function arguments)
+  - Members (ie: after a dot)
+  - Parses the source on each save to indicate errors in the gutter
 
 ## Settings
 

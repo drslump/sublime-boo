@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>name</key>
+	<string>Boo</string>
+	<key>scope</key>
+	<string>source.boo</string>
+	<key>settings</key>
+	<dict>
+		<key>decreaseIndentPattern</key>
+		<string>^\s*(elif|else|except|ensure|get|set)\b.*:</string>
+		<key>increaseIndentPattern</key>
+		<string>.+:\s*$</string>
+		<!-- string>^\s*(class|interface|get|set|def|elif|else|unless|except|ensure|for|if|try|while)\b.*:\s*$</string -->
+	</dict>
+	<key>uuid</key>
+	<string>54e4ff50-4b65-11e2-bcfd-0800200c9a66</string>
+</dict>
+</plist>

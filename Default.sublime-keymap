@@ -1,0 +1,9 @@
+[{
+    "keys": ["."],
+    "command": "boo_dot_complete",
+    "context": [
+        {"key": "boo_supported_language"},
+        {"key": "boo_dot_complete"},
+        {"key": "boo_is_code"}
+    ]
+}]

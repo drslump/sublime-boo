@@ -1,0 +1,21 @@
+{
+	// Compiler executable
+    "bin": "boojs",
+
+    // List of arguments for the compiler
+    "args": [],
+
+    // .rsp file with settings to use by the compiler
+    // If not set will try to auto discover it in parent directories
+    // relative to the source file. Set it to false to disable it.
+    //"rsp": "/path/to/file.rsp",
+
+    // Enable auto completion of global symbols
+    "globals_complete": true,
+
+    // Enable auto completion of local symbols
+    "locals_complete": true,
+
+    // Enable auto completion for symbol members
+    "dot_complete": true
+}

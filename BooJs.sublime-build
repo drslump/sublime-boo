@@ -1,0 +1,5 @@
+{
+	"cmd": ["boojs", "-srcdir:$file_path"],
+	"file_regex": "^[ ]*File \"(...*?)\", line ([0-9]*)",
+	"selector": "source.boo"
+}

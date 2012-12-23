@@ -1,0 +1,9 @@
+# SublimeBoo
+
+
+## Settings
+
+Create a `Boo.sublime-settings` file or include plugin settings prefixed with `boo.`
+in your preferences or project files.
+
+See the supplied `Boo.sublime-settings` file for the list of available settings.

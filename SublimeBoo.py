@@ -90,9 +90,9 @@ class QueryServer(object):
             return
 
         cwd = None
-        args = self.args[:]
+        args = list(self.args)
         if self.rsp:
-            args.append('@{1}'.format(self.rsp))
+            args.append('@{0}'.format(self.rsp))
             cwd = os.path.dirname(self.rsp)
 
         args.append('-hints-server')
@@ -100,7 +100,7 @@ class QueryServer(object):
         self.proc = subprocess.Popen(
             args,
             cwd=cwd,
-            shell=True,
+            #shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE
@@ -112,7 +112,7 @@ class QueryServer(object):
         t = threading.Thread(target=self.thread_stderr)
         t.start()
 
-        print '[Boo] Started hint server with PID %s using: %s' % (self.proc.pid, cmd)
+        print '[Boo] Started hint server with PID %s using: %s' % (self.proc.pid, ' '.join(args))
 
         self.check_last_usage()
 
@@ -494,8 +494,9 @@ class BooEventListener(sublime_plugin.EventListener):
             to find a valid key. If still not found the default is returned.
         """
         settings = sublime.active_window().active_view().settings()
-        if settings.has('{0}.{1}'.format('boo', key)):
-            return settings.get(key)
+        prefixed = '{0}.{1}'.format('boo', key)
+        if settings.has(prefixed):
+            return settings.get(prefixed)
 
         settings = sublime.load_settings('Boo.sublime-settings')
         return settings.get(key, default)

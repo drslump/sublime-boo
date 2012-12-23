@@ -17,3 +17,10 @@ Create a `Boo.sublime-settings` file or include plugin settings prefixed with `b
 in your preferences or project files.
 
 See the supplied `Boo.sublime-settings` file for the list of available settings.
+
+## License
+
+Distributed under The MIT License
+
+Syntax file is based on work from [Shammah](https://github.com/Shammah/boo-sublime), 
+used with permission.

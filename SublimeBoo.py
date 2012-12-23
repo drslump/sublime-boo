@@ -152,7 +152,7 @@ class QueryServer(object):
                 line = self.proc.stdout.readline()
                 if line:
                     line = line.strip()
-                    #print 'STDOUT: %s' % line
+                    # print 'STDOUT: %s' % line
                     if len(line) and line[0] != '#':
                         self.queue.put(line)
         finally:
@@ -263,6 +263,7 @@ class QueryServer(object):
                 desc = "{0}\t{1}".format(desc, rettype)
             elif type_ == 'Method':
                 desc = "{0}()\t{1}".format(symbol, type_)
+                symbol = symbol + '($1)$0'
             else:
                 desc = "{0}\t{1}".format(symbol, type_)
 

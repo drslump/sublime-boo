@@ -341,7 +341,8 @@ class BooEventListener(sublime_plugin.EventListener):
         # Get hints for globals
         self.update_globals(view)
 
-        sublime.set_timeout(lambda: self.query_parse(view), 10)
+        if self.get_setting('parse_on_save', True):
+            sublime.set_timeout(lambda: self.query_parse(view), 10)
 
     def on_selection_modified(self, view):
         if not self.is_supported_language(view):

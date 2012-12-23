@@ -1,5 +1,5 @@
 {
-	// Compiler executable
+    // Compiler executable
     "bin": "boojs",
 
     // List of arguments for the compiler
@@ -17,5 +17,8 @@
     "locals_complete": true,
 
     // Enable auto completion for symbol members
-    "dot_complete": true
+    "dot_complete": true,
+
+    // Enable automatic parsing when saving a file
+    "parse_on_save": true
 }

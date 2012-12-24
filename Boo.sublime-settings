@@ -12,7 +12,7 @@
     //"rsp": "/path/to/file.rsp",
 
     // Enable the inclusion of default file completions
-    "default_complete": false,
+    "defaults_complete": false,
 
     // Enable auto completion of global symbols
     "globals_complete": true,

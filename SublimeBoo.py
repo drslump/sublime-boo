@@ -42,6 +42,7 @@ TYPESMAP = {
     'System.Array': 'array',
     'Boo.Lang.List`1[System.Object]': 'List[object]',
     'System.Type': 'Type',
+    'BooJs.Lang.Globals.Object': 'object',
 }
 
 BUILTINS = (
@@ -152,7 +153,7 @@ class QueryServer(object):
                 line = self.proc.stdout.readline()
                 if line:
                     line = line.strip()
-                    print 'STDOUT: %s' % line
+                    # print 'STDOUT: %s' % line
                     if len(line) and line[0] != '#':
                         self.queue.put(line)
         finally:
@@ -243,13 +244,13 @@ class QueryServer(object):
 
             symbol, type_, desc = item.split('|')
             if '(' in desc:
-                args = []
-                matches = re.finditer(r'[\(,]([^\),]+)', desc)
-                for idx, match in enumerate(matches):
-                    param = match.group(1).strip()
-                    param = TYPESMAP.get(param, param)
-                    args.append('${' + str(idx + 1) + ':' + param + '}')
-                symbol = symbol + '(' + ', '.join(args) + ')$0'
+                # args = []
+                # matches = re.finditer(r'[\(,]([^\),]+)', desc)
+                # for idx, match in enumerate(matches):
+                #     param = match.group(1).strip()
+                #     param = TYPESMAP.get(param, param)
+                #     args.append('${' + str(idx + 1) + ':' + param + '}')
+                # symbol = symbol + '(' + ', '.join(args) + ')$0'
 
                 # The autocomplete popup is really small, remove method args
                 desc = re.sub(r'\([^\)]*\)', '()', desc)
@@ -261,6 +262,7 @@ class QueryServer(object):
 
                 desc = ' '.join(desc)
                 desc = "{0}\t{1}".format(desc, rettype)
+                symbol = symbol + '($1)$0'
             elif type_ == 'Method':
                 desc = "{0}()\t{1}".format(symbol, type_)
                 symbol = symbol + '($1)$0'
@@ -418,10 +420,11 @@ class BooEventListener(sublime_plugin.EventListener):
         # Sort by symbol
         hints.sort(key=lambda tup: tup[1])
 
-        if self.get_setting('default_complete', False):
-            self.last_result = (hints, flags)
-        else:
+        if self.get_setting('defaults_complete'):
             self.last_result = hints
+        else:
+            self.last_result = (hints, flags)
+
         return self.last_result
 
     def query_members(self, view, offset=None):

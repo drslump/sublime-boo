@@ -418,7 +418,10 @@ class BooEventListener(sublime_plugin.EventListener):
         # Sort by symbol
         hints.sort(key=lambda tup: tup[1])
 
-        self.last_result = (hints, flags)
+        if self.get_setting('default_complete', False):
+            self.last_result = (hints, flags)
+        else:
+            self.last_result = hints
         return self.last_result
 
     def query_members(self, view, offset=None):

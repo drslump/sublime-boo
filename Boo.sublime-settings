@@ -3,13 +3,16 @@
     "bin": "boojs",
 
     // List of arguments for the compiler
-    // Include `-hints-boo` to enable hints for standard boo instead of boojs
-    "args": [],
+    // Include "-hints-boo" to enable hints for standard boo instead of boojs
+    "args": [ "-ducky" ],
 
     // .rsp file with settings to use by the compiler
     // If not set will try to auto discover it in parent directories
     // relative to the source file. Set it to false to disable it.
     //"rsp": "/path/to/file.rsp",
+
+    // Enable the inclusion of default file completions
+    "default_complete": false,
 
     // Enable auto completion of global symbols
     "globals_complete": true,

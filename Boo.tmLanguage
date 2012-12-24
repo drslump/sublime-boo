@@ -8,6 +8,18 @@
 	</array>
 	<key>name</key>
 	<string>Boo</string>
+	<key>scopeName</key>
+	<string>source.boo</string>
+
+	<key>firstLineMatch</key>
+	<string>^#!/.*\bboo(c|js)?[0-9.-]*\b</string>
+	<key>foldingStartMarker</key>
+	<string>^\s*(def|class)\s+([.a-zA-Z0-9_ &lt;]+)\s*(\((.*)\))?\s*:|\{\s*$|\(\s*$|\[\s*$|^\s*"""(?=.)(?!.*""")</string>
+	<key>foldingStopMarker</key>
+	<string>^\s*$|^\s*\}|^\s*\]|^\s*\)|^\s*"""\s*$|^\s*'''\s*$</string>
+	<key>keyEquivalent</key>
+	<string>^~B</string>
+
 	<key>patterns</key>
 	<array>
 		<dict>
@@ -87,6 +99,14 @@
 			<string>string.quoted.double.source.boo</string>
 		</dict>
 		<dict>
+			<key>begin</key>
+			<string>`</string>
+			<key>end</key>
+			<string>`</string>
+			<key>name</key>
+			<string>string.quoted.backtick.source.boo</string>
+		</dict>
+		<dict>
 			<key>match</key>
 			<string>\b(sbyte|short|int|long|byte|ushort|uint|ulong|single|double|decimal|char|string|bool|object|duck)\b</string>
 			<key>name</key>
@@ -139,8 +159,6 @@
 			<string>variable.source.boo</string>
 		</dict>
 	</array>
-	<key>scopeName</key>
-	<string>source.boo</string>
 	<key>uuid</key>
 	<string>86814aa0-4b60-11e2-bcfd-0800200c9a66</string>
 </dict>

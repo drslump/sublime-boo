@@ -12,7 +12,44 @@
 		<string>^\s*(elif|else|except|ensure|get|set)\b.*:</string>
 		<key>increaseIndentPattern</key>
 		<string>.+:\s*$</string>
-		<!-- string>^\s*(class|interface|get|set|def|elif|else|unless|except|ensure|for|if|try|while)\b.*:\s*$</string -->
+
+        <key>cancelCompletion</key>
+        <string>^(.*\b(and|or)$)|(\s*(pass|return|and|or|(class|def|import)\s*[a-zA-Z_0-9]+)$)</string>
+
+		<key>shellVariables</key>
+		<array>
+			<dict>
+				<key>name</key>
+				<string>TM_COMMENT_START</string>
+				<key>value</key>
+				<string># </string>
+			</dict>
+			<dict>
+				<key>name</key>
+				<string>TM_COMMENT_START_2</string>
+				<key>value</key>
+				<string>// </string>
+			</dict>
+			<dict>
+				<key>name</key>
+				<string>TM_COMMENT_START_3</string>
+				<key>value</key>
+				<string>/*</string>
+			</dict>
+			<dict>
+				<key>name</key>
+				<string>TM_COMMENT_END_3</string>
+				<key>value</key>
+				<string>*/</string>
+			</dict>
+  	
+			<dict>
+				<key>name</key>
+				<string>TM_LINE_TERMINATOR</string>
+				<key>value</key>
+				<string>:</string>
+			</dict>
+		</array>        
 	</dict>
 	<key>uuid</key>
 	<string>54e4ff50-4b65-11e2-bcfd-0800200c9a66</string>

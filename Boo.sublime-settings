@@ -3,6 +3,7 @@
     "bin": "boojs",
 
     // List of arguments for the compiler
+    // Include `-hints-boo` to enable hints for standard boo instead of boojs
     "args": [],
 
     // .rsp file with settings to use by the compiler

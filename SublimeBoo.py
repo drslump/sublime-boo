@@ -1,9 +1,11 @@
 """
     Settings:
 
+        - boo.defaults_complete (boo) - set to false to disable default completion from the file
         - boo.globals_complete (bool) - set to false to disable completion for top level symbols
         - boo.locals_complete (bool) - set to false to disable completion for locals
         - boo.dot_complete (bool) - set to false to disable automatic completion popup when pressing a dot
+        - boo.parse_on_save (bool) - set to false to disable automatic parsing of the file
 
     Hack:
 
@@ -18,18 +20,32 @@ import re
 import subprocess
 import threading
 import time
+import json
 import Queue
 import tempfile
 import sublime
 import sublime_plugin
 
+
+# HACK: Prevent crashes with broken pipe signals
+try:
+    import signal
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+except ValueError:
+    pass  # Ignore, in Windows we cannot capture SIGPIPE
+
+
 # After the given seconds of inactivity the server process will be terminated
 SERVER_TIMEOUT = 300
 
 LANGUAGE_REGEX = re.compile("(?<=source\.)[\w+\-#]+")
-MEMBER_REGEX = re.compile("(([a-zA-Z_]+[0-9_]*)|([\)\]])+)(\.)$")
-IMPORT_REGEX = re.compile(r'^import\s+([\w\.]+)(\([\w\s,]+)?')
-TERMINATOR = '|||'
+IMPORT_REGEX = re.compile(r'^import\s+([\w\.]+)?|^from\s+([\w\.]+)?')
+NAMED_REGEX = re.compile(r'\b(class|struct|enum|macro|def)\s$')
+AS_REGEX = re.compile(r'(\sas|\sof|\[of)\s$')
+PARAMS_REGEX = re.compile(r'(def|do)(\s\w+)?\s*\([\w\s,\*]*$')
+TYPE_REGEX = re.compile(r'^\s*(class|struct)\s')
+MEMBER_REGEX = re.compile(r'[\w\)\]]\.$')
+
 TYPESMAP = {
     'Void': 'void',
     'Boolean': 'bool',
@@ -45,6 +61,17 @@ TYPESMAP = {
     'BooJs.Lang.Globals.Object': 'object',
 }
 
+PRIMITIVES = (
+    ('void\tprimitive', 'void'),
+    ('object\tprimitive', 'object'),
+    ('bool\tprimitive', 'bool'),
+    ('int\tprimitive', 'int'),
+    ('double\tprimitive', 'double'),
+    ('string\tprimitive', 'string'),
+
+    ('System\tnamespace', 'System')
+)
+
 BUILTINS = (
     ('assert\tmacro', 'assert '),
     ('print\tmacro', 'print '),
@@ -53,6 +80,8 @@ BUILTINS = (
     ('len()\tint', 'len(${1:array})$0'),
     ('join()\tstring', 'join(${1:array}, ${2:string})$0'),
     ('range()\tarray', 'range(${1:int})$0'),
+
+    ('System\tnamespace', 'System')
 )
 
 IGNORED = (
@@ -61,12 +90,22 @@ IGNORED = (
 )
 
 
-# HACK: Prevent crashes with broken pipe signals
-try:
-    import signal
-    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-except ValueError:
-    pass  # Ignore, in Windows we cannot capture SIGPIPE
+def maptype(t):
+    if not t:
+        return ''
+
+    if t in TYPESMAP:
+        return TYPESMAP[t]
+
+    # Process special types
+    if t.startswith('System.Nullable[of '):
+        t = t[len('System.Nullable[of '):-1]
+        return TYPESMAP.get(t, t) + '?'
+    if t.startswith('Boo.Lang.List[of '):
+        t = t[len('Boo.Lang.List[of '):-1]
+        return 'List[' + TYPESMAP.get(t, t) + ']'
+
+    return t
 
 
 class QueryServer(object):
@@ -80,8 +119,6 @@ class QueryServer(object):
 
         self.rsp = rsp
         self.proc = None
-        # Create a temporary file to hold the buffer contents
-        self.tmpfile = tempfile.NamedTemporaryFile(delete=True)
         self.queue = Queue.Queue()
 
     def start(self):
@@ -121,9 +158,6 @@ class QueryServer(object):
         if not self.proc:
             return
 
-        # Notify any in flight query that it should end
-        self.queue.put(TERMINATOR)
-
         # Try to terminate the compiler gracefully
         try:
             self.proc.stdin.write("quit\n")
@@ -132,7 +166,7 @@ class QueryServer(object):
             pass
 
         # If still alive try to kill it
-        if self.proc.poll() == None:
+        if self.proc.poll() is None:
             print '[Boo] Killing hint server process %s...' % self.proc.pid
             self.proc.kill()
 
@@ -152,9 +186,9 @@ class QueryServer(object):
                     break
                 line = self.proc.stdout.readline()
                 if line:
-                    line = line.strip()
-                    # print 'STDOUT: %s' % line
-                    if len(line) and line[0] != '#':
+                    if line[0] == '#':
+                        print '[Boo] DEBUG %s' % line[1:].strip()
+                    else:
                         self.queue.put(line)
         finally:
             self.stop()
@@ -166,129 +200,104 @@ class QueryServer(object):
                     break
                 line = self.proc.stderr.readline()
                 if line:
-                    print '[Boo] ERROR: %s' % line.strip()
+                    if line[0] == '#':
+                        print '[Boo] DEBUG %s' % line[1:].strip()
+                    else:
+                        self._empty_queue()
+                        print '[Boo] ERROR: %s' % line.strip()
         finally:
             self.stop()
 
-    def query(self, command, content=None):
-
-        self.start()
-
-        if content:
-            command = command.format(fname=self.tmpfile.name)
-            self.tmpfile.seek(0)
-            self.tmpfile.truncate()
-            self.tmpfile.write(content)
-            # Make sure every byte is written before querying the server
-            self.tmpfile.flush()
-            os.fsync(self.tmpfile.fileno())
-
-        # Make sure the queue is empty
+    def _empty_queue(self):
+        """ Make sure the queue is empty """
         try:
             while True:
                 self.queue.get_nowait()
         except:
             pass
 
+    def query(self, command, fname=None, code=None, **kwargs):
+        kwargs['command'] = command
+        kwargs['fname'] = fname
+        kwargs['code'] = code
+
+        command = json.dumps(kwargs)
+
+        # Make sure we have a server running
+        self.start()
+
+        # Reset the response queue
+        self._empty_queue()
+
         # Issue the command
-        print '[Boo] Command: %s' % command
+        #print '[Boo] Command: %s' % command
         self.proc.stdin.write("%s\n" % command)
 
         # Wait for the results
+        resp = None
+        try:
+            resp = self.queue.get(timeout=3.0)
+            #print '[Boo] Response: %s' % resp
+            resp = json.loads(resp)
+        except Exception as ex:
+            self._empty_queue()
+            print '[Boo] Error: %s' % ex
+
+        return resp
+
+    def hint(self, hint):
+        name, node, info = (hint['name'], hint['node'], hint.get('info'))
+
+        if node == 'Method':
+            ret = info.split('): ')[-1]
+            desc = '{0}()\t{1}'.format(name, maptype(ret))
+            name = name + '($1)$0'
+        elif node == 'Namespace':
+            desc = '{0}\tnamespace'.format(name)
+        elif node == 'Type':
+            info = ' '.join(info.split(',')).lower()
+            desc = '{0}\t{1}'.format(name, info)
+        else:
+            desc = '{0}\t{1}'.format(name, maptype(info))
+
+        return (desc, name)
+
+    def locals(self, fname, code, line):
+        resp = self.query('locals', fname=fname, code=code, line=line)
+        hints = [self.hint(hint) for hint in resp['hints']]
+        return ((a.replace("\t", " <local>\t"), b) for a, b in hints)
+
+    def globals(self, fname, code):
+        resp = self.query('globals', fname=fname, code=code)
+
         hints = []
-        while True:
-            try:
-                read = self.queue.get(timeout=3.0)
-                if read == TERMINATOR:
-                    break
+        for hint in resp['hints']:
+            name, node, info = (hint['name'], hint['node'], hint.get('info'))
 
-                hints.append(read)
-            except Exception as ex:
-                print '[Boo] Error: %s' % ex
-                break
-
-        return hints
-
-    def locals(self, content, line):
-        names = self.query('locals {fname}@%d' % line, content)
-        # We only get a list of names for locals (no type information)
-        return [('{0}\tlocal'.format(name), name) for name in names]
-
-    def globals(self, content):
-        items = self.query('globals {fname}', content)
-
-        hints = []
-        for item in items:
-            symbol, type_, desc = item.split('|')
-
-            if symbol[-5:] == 'Macro':
-                lower = symbol[0:-5].lower()
+            if name[-5:] == 'Macro':
+                lower = name[0:-5].lower()
                 hints.append(('{0}\tmacro'.format(lower), lower + ' '))
 
-            if symbol[-9:] == 'Attribute':
-                lower = symbol[0:-9].lower()
+            if name[-9:] == 'Attribute':
+                lower = name[0:-9].lower()
                 hints.append(('{0}\tattribute'.format(lower), lower))
 
-            desc = '{0}\t{1}'.format(symbol, type_)
-            hints.append((desc, symbol))
+            hints.append(self.hint(hint))
 
         return hints
 
-    def members(self, content, offset):
-        items = self.query('members {fname}@%d' % offset, content)
+    def members(self, fname, code, offset, line=None):
+        resp = self.query('members', fname, code, offset=offset, line=line)
 
         hints = []
-        for item in items:
-            # Remove overloads count
-            item = re.sub(r'\s?\(\d+ overloads\)', '', item)
-
-            symbol, type_, desc = item.split('|')
-            if '(' in desc:
-                # args = []
-                # matches = re.finditer(r'[\(,]([^\),]+)', desc)
-                # for idx, match in enumerate(matches):
-                #     param = match.group(1).strip()
-                #     param = TYPESMAP.get(param, param)
-                #     args.append('${' + str(idx + 1) + ':' + param + '}')
-                # symbol = symbol + '(' + ', '.join(args) + ')$0'
-
-                # The autocomplete popup is really small, remove method args
-                desc = re.sub(r'\([^\)]*\)', '()', desc)
-
-                desc = desc.split(' ')
-                rettype = desc.pop(0)
-
-                rettype = TYPESMAP.get(rettype, rettype)
-
-                desc = ' '.join(desc)
-                desc = "{0}\t{1}".format(desc, rettype)
-                symbol = symbol + '($1)$0'
-            elif type_ == 'Method':
-                desc = "{0}()\t{1}".format(symbol, type_)
-                symbol = symbol + '($1)$0'
-            else:
-                desc = "{0}\t{1}".format(symbol, type_)
-
-            hints.append((desc, symbol))
+        for hint in resp['hints']:
+            hints.append(self.hint(hint))
 
         return hints
 
-    def overloads(self, content, line, method):
-        items = self.query('overloads %s {fname}@%d' % (method, line), content)
-        print items
-        return []
-
-    def parse(self, content):
-        items = self.query('parse {fname}', content)
-
-        hints = []
-        for item in items:
-            parts = item.split('|')
-            parts[1] = int(parts[1])
-            parts[2] = int(parts[2])
-            hints.append(parts)
-
-        return hints
+    def parse(self, fname, code):
+        resp = self.query('parse', fname=fname, code=code)
+        return resp['errors'] + resp['warnings']
 
 
 class BooDotComplete(sublime_plugin.TextCommand):
@@ -301,7 +310,7 @@ class BooDotComplete(sublime_plugin.TextCommand):
 
         caret = self.view.sel()[0].begin()
         line = self.view.substr(sublime.Region(self.view.word(caret - 1).a, caret))
-        if MEMBER_REGEX.search(line) != None:
+        if MEMBER_REGEX.search(line) is not None:
             self.view.run_command("hide_auto_complete")
             sublime.set_timeout(self.delayed_complete, 1)
 
@@ -309,16 +318,92 @@ class BooDotComplete(sublime_plugin.TextCommand):
         self.view.run_command("auto_complete")
 
 
+class BooQuickPanelComplete(sublime_plugin.WindowCommand):
+
+    def run(self):
+        # TODO: Pre filter the results based on the already written characters
+
+        self.hints = [
+            ['Entity', 'Boo.Ide.CompletionProposal.Entity'],
+            ['Name', 'Boo.Ide.CompletionProposal.Name'],
+            ['EntityType', 'Boo.Ide.CompletionProposal.EntityType'],
+            ['Description', 'Boo.Ide.CompletionProposal.Description'],
+            ['Equals(obja as object, count as int, messages as (string), errors as List[of string], extra as Hash, node as Boo.Lang.Compiler.Ast.Reference) as bool',
+             '(obja: object, count: int, messages: (string), errors: List[of string], extra: Hash, node: Boo.Lang.Compiler.Ast.Reference) as bool'],
+            ['GetHashCode(): int',
+             '(foo: string, bar: object, node: Boo.Lang.Compiler.Ast.MethodInvocationExpression): int'],
+            ['GetType(foo, bar, baz, node): System.Type',
+             '(foo: string, bar: object, baz: double, node: Boo.Lang.Compiler.Ast.MethodInvocationExpression): System.Type'],
+            ['ToString()', 'System.String ToString()']
+        ]
+
+        # Ignore if there are no hints to show
+        if not self.hints:
+            return
+
+        flags = 0  # sublime.MONOSPACE_FONT
+        selected = 0
+        self.window.show_quick_panel(self.hints, self.on_select, flags, selected)
+
+    def on_select(self, idx):
+        if idx < 0:
+            return
+
+        hint = self.hints[idx]
+
+        view = self.window.active_view()
+        edit = view.begin_edit()
+        for s in view.sel():
+            view.insert(edit, s.a, hint[0])
+        view.end_edit(edit)
+
+
+class BooGotoDeclaration(sublime_plugin.TextCommand):
+
+    def run(self, edit):
+        # Get the position at the start of the symbol
+        caret = self.view.sel()[0].begin()
+        caret = self.view.word(caret).a
+        row, col = self.view.rowcol(caret)
+
+        print 'TODO BooGoToDeclaration: %d:%d' % (row + 1, col + 1)
+
+
+class BooFindUsages(sublime_plugin.TextCommand):
+    """
+    TODO: Implement Find Usages by sending the server a list of files, it will
+          then visit them looking for the desired entity.
+    """
+    def run(self, edit):
+        pass
+
+
 class BooEventListener(sublime_plugin.EventListener):
+    """
+    TODO: Refactor the query commands into a separate object so we can use them
+          from Window or edit commands easily.
+
+    TODO: Use threading to improve editor responsiveness.
+          Blocking operations must execute in its own thread, to comunicate back with
+          sublime (the view) we must use a function via settimeout (the only API thread safe)
+          http://tekonomist.wordpress.com/2010/06/04/latex-plugin-update-threading-for-fun-and-profit/
+    """
 
     def __init__(self):
-        self.file_mapping = {}
+        self.servers = {}
+
+        # TODO: This state should be targeted to a given fname/view!
         self.last_offset = -1
         self.last_result = None
         self.globals = []
         self.lints = {}
 
+        # Cache for .rsp look up
+        self._fname2rsp = {}
+
     def on_query_context(self, view, key, operator, operand, match_all):
+        """ Resolves context queries for keyboard shortcuts definitions
+        """
         if key == "boo_dot_complete":
             return self.get_setting('dot_complete', True)
         elif key == "boo_supported_language":
@@ -326,7 +411,7 @@ class BooEventListener(sublime_plugin.EventListener):
         elif key == "boo_is_code":
             caret = view.sel()[0].a
             scope = view.scope_name(caret).strip()
-            return re.search(r'string\.|comment\.', scope) == None
+            return re.search(r'string\.|comment\.', scope) is None
 
         return False
 
@@ -353,6 +438,8 @@ class BooEventListener(sublime_plugin.EventListener):
         self.update_status(view)
 
     def update_status(self, view):
+        """ Updates the status bar with parser hints
+        """
         ln = view.rowcol(view.sel()[-1].b)[0]
         if ln in self.lints:
             view.set_status('Boo', self.lints[ln])
@@ -360,106 +447,134 @@ class BooEventListener(sublime_plugin.EventListener):
             view.erase_status('Boo')
 
     def update_globals(self, view):
+        """ Updates the hints for global symbols
+        """
         def query(view):
             server = self.get_server(view)
-            self.globals = server.globals(self.get_contents(view))
+            self.globals = server.globals(view.file_name(), self.get_contents(view))
 
+        # Run the command asynchronously to avoid blocking the editor
         if self.get_setting('globals_complete', True):
             sublime.set_timeout(lambda: query(view), 300)
 
     def on_query_completions(self, view, prefix, locations):
+        start = time.time()
         hints = []
 
         if not self.is_supported_language(view):
-            return hints
+            return self.normalize_hints(hints)
 
-        # Find previous dot (or non-word character)
+        # Find a preceding non-word character in the line
         offset = locations[0]
-        if view.substr(offset - 1) not in ('.',):
-            offset = view.word(offset - 1).a
+        if view.substr(offset-1) not in '.':
+            offset = view.word(offset).a
 
+        # Try to optimize by comparing with the last execution
         if offset == self.last_offset:
             print '[Boo] Reusing last result'
             return self.last_result
+
+        # Reset last offset to the current one
         self.last_offset = offset
 
-        # Detect imports
-        line = view.substr(view.line(offset))
+        # Obtain the string from the start of the line until the caret
+        line = view.substr(sublime.Region(view.line(offset).a, offset))
+        print 'LINE', line
+
+        # Manage auto completion on import statements
         matches = IMPORT_REGEX.search(line)
         if matches:
-            ns = matches.group(1)
-            if matches.group(2):
-                ns = ns + '.'
+            ns = matches.group(1) or matches.group(2)
+            ns = ns.rstrip('.') + '.'
 
+            # Auto complete based on members from the detected namespace
             server = self.get_server(view)
-            hints = server.members(ns, len(ns))
+            hints = server.members('NS', ns, len(ns))
 
-            # Since we are modifying the imports lets schedule an update for the globals
+            # Since we are modifying imports lets schedule a refresh of the globals
             self.update_globals(view)
 
-            return self.normalize_hints(hints)
+            self.last_result = self.normalize_hints(hints)
+            return self.last_result
 
+        # Check if we need globals, locals or member hints
         ch = view.substr(offset - 1)
-        # If no dot is found include globals and locals
-        if ch != '.':
+        # A preceding dot always trigger member hints
+        if ch == '.':
+            print 'DOT'
+            hints += self.query_members(view, offset)
+        # Type annotations and definitions only hint globals (for inheritance)
+        elif AS_REGEX.search(line) or TYPE_REGEX.search(line):
+            print 'AS'
+            hints += PRIMITIVES
+            hints += self.globals
+        # When naming stuff or inside parameters definition disable hints
+        elif NAMED_REGEX.search(line) or PARAMS_REGEX.search(line):
+            print 'NAMED or PARAMS'
+            hints = []
+        else:
+            print 'ELSE'
             hints += BUILTINS
-            if self.get_setting('globals_complete', True):
-                hints += self.globals
-            if self.get_setting('locals_complete', True):
-                hints += self.query_locals(view)
-            hints += self.query_members(view, offset)
-        else:
-            hints += self.query_members(view, offset)
+            hints += self.globals
+            #hints += self.query_locals(view, offset)
+            # Without a preceding dot it reports back the ones in the current type (self)
+            hints += self.query_members(view, offset, line=view.rowcol(offset)[0] + 1)
 
-        return self.normalize_hints(hints)
+        self.last_result = self.normalize_hints(hints)
 
-    def normalize_hints(self, hints, flags=sublime.INHIBIT_WORD_COMPLETIONS | sublime.INHIBIT_EXPLICIT_COMPLETIONS):
-        # Remove ignored entries
-        hints = filter(lambda tup: tup[0] not in IGNORED, hints)
-
-        # Sort by symbol
-        hints.sort(key=lambda tup: tup[1])
-
-        if self.get_setting('defaults_complete'):
-            self.last_result = hints
-        else:
-            self.last_result = (hints, flags)
-
+        print 'QueryCompletion: %d' % ((time.time()-start)*1000)
         return self.last_result
 
-    def query_members(self, view, offset=None):
+    def normalize_hints(self, hints, flags=sublime.INHIBIT_WORD_COMPLETIONS | sublime.INHIBIT_EXPLICIT_COMPLETIONS):
+        # Remove ignored and duplicates (overloads are not shown for autocomplete)
+        seen = set()
+        hints = [x for x in hints if x[1] not in IGNORED and x[1] not in seen and not seen.add(x[1])]
+
+        # Sort by symbol
+        hints.sort(key=lambda x: x[1])
+
+        if not self.get_setting('defaults_complete'):
+            hints = (hints, flags)
+
+        return hints
+
+    def query_members(self, view, offset=None, line=None):
         if offset is None:
             offset = view.sel()[0].a
 
         server = self.get_server(view)
-        hints = server.members(self.get_contents(view), offset)
+        hints = server.members(view.file_name(), self.get_contents(view), offset, line)
         return hints
 
-    def query_locals(self, view):
+    def query_locals(self, view, offset=None):
+        if not self.get_setting('locals_complete', True):
+            return []
+
         # Get current cursor position and obtain its row number (1 based)
-        offset = view.sel()[0].a
+        if offset is None:
+            offset = view.sel()[0].a
         line = view.rowcol(offset)[0] + 1
 
         server = self.get_server(view)
-        hints = server.locals(self.get_contents(view), line)
+        hints = server.locals(view.file_name(), self.get_contents(view), line)
         return hints
 
     def query_parse(self, view):
         server = self.get_server(view)
-        hints = server.parse(self.get_contents(view))
+        hints = server.parse(view.file_name(), self.get_contents(view))
 
         self.lints.clear()
         errors = []
         warnings = []
         for hint in hints:
-            line, col = (hint[1] - 1, hint[2] - 1)
+            line, col = (hint['line'] - 1, hint['column'] - 1)
             a = b = view.text_point(line, col)
-            if hint[0][0:3] == 'BCE':
+            if hint['code'][0:3] == 'BCE':
                 errors.append(sublime.Region(a, b))
             else:
                 warnings.append(sublime.Region(a, b))
 
-            self.lints[line] = '{0}: {1}'.format(hint[0], hint[3])
+            self.lints[line] = '{0}: {1}'.format(hint['code'], hint['message'])
 
         view.erase_regions('boo-errors')
         view.erase_regions('boo-warnings')
@@ -475,25 +590,34 @@ class BooEventListener(sublime_plugin.EventListener):
         return view.substr(sublime.Region(0, view.size()))
 
     def get_server(self, view):
-        fname = view.file_name()
-        if fname not in self.file_mapping:
-            cmd = self.get_setting('bin')
-            args = self.get_setting('args')
-            rsp = self.get_setting('rsp', self.find_rsp_file(fname))
-            self.file_mapping[fname] = QueryServer(cmd, args, rsp)
+        """ Obtain a server valid for the current view file. If a suitable one was
+            already spawned it gets reused, otherwise a new one is created.
+        """
+        cmd = self.get_setting('bin')
+        args = self.get_setting('args', [])
+        rsp = self.get_setting('rsp', self.find_rsp_file(view.file_name()))
 
-        return self.file_mapping[fname]
+        key = (cmd, tuple(args), rsp)
+        if key not in self.servers:
+            self.servers[key] = QueryServer(cmd, args, rsp)
+
+        return self.servers[key]
 
     def find_rsp_file(self, fname):
+        if fname in self._fname2rsp:
+            return self._fname2rsp[fname]
+
+        self._fname2rsp[fname] = None
         path = os.path.dirname(fname)
         while len(path) > 3:
             matches = glob.glob('{0}/*.rsp'.format(path))
             if len(matches):
-                return matches[0]
+                self._fname2rsp[fname] = matches[0]
+                break
 
             path = os.path.dirname(path)
 
-        return None
+        return self._fname2rsp[fname]
 
     def get_setting(self, key, default=None):
         """ Search for the setting in Sublime using the "boo." prefix. If

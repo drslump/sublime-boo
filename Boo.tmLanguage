@@ -6,8 +6,10 @@
 	<array>
 		<string>boo</string>
 	</array>
+	
 	<key>name</key>
 	<string>Boo</string>
+	
 	<key>scopeName</key>
 	<string>source.boo</string>
 
@@ -24,27 +26,100 @@
 	<array>
 		<dict>
 			<key>match</key>
+			<string>^\s*((static|partial|abstract|final)\s+)*(class)\s+([A-Za-z_][A-Za-z0-9_]*)</string>
+			<key>name</key>
+			<string>meta.class.boo</string>
+			<key>captures</key>
+			<dict>
+				<key>1</key>
+				<dict>
+					<key>name</key>
+					<string>storage.modifier.boo</string>
+				</dict>
+				<key>3</key>
+				<dict>
+					<key>name</key>
+					<string>storage.type.class.boo</string>
+				</dict>
+				<key>4</key>
+				<dict>
+					<key>name</key>
+					<string>entity.name.type.class.boo</string>
+				</dict>
+			</dict>
+		</dict>
+		<dict>
+			<key>match</key>
+			<string>^\s*((static|private|protected|public|virtual|override|abstract|final)\s+)*(def)\s+([A-Za-z_][A-Za-z0-9_]*)</string>
+			<key>name</key>
+			<string>meta.function.boo</string>
+			<key>captures</key>
+			<dict>
+				<key>1</key>
+				<dict>
+					<key>name</key>
+					<string>storage.modifier.boo</string>
+				</dict>
+				<key>3</key>
+				<dict>
+					<key>name</key>
+					<string>storage.type.function.boo</string>
+				</dict>
+				<key>4</key>
+				<dict>
+					<key>name</key>
+					<string>entity.name.function.boo</string>
+				</dict>
+			</dict>
+		</dict>
+
+		<dict>
+			<key>match</key>
 			<string>\b(import|from|if|else|elif|unless|for|in|while|continue|break|pass|return|class|interface|def|override|struct|namespace|enum|try|except|ensure|assert|yield|callable|goto|virtual|get|set|of|ref)\b</string>
 			<key>name</key>
-			<string>keyword.control.source.boo</string>
+			<string>keyword.control.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
-			<string>\b(and|or|not|isa|is|as|cast)\b</string>
+			<string>\b(and|or|not|is)\b</string>
 			<key>name</key>
-			<string>keyword.operator.source.boo</string>
+			<string>keyword.operator.logical.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
-			<string>(\*|\b/\b|%|\+|-|\*\*|\^|\|=)</string>
+			<string>\b(isa|as|cast)\b</string>
 			<key>name</key>
-			<string>keyword.operator.source.boo</string>
+			<string>keyword.operator.cast.boo</string>
+		</dict>
+		<dict>
+			<key>match</key>
+			<string>&lt;\=|&gt;\=|\=\=|&lt;|&gt;|\!\=</string>
+			<key>name</key>
+			<string>keyword.operator.comparison.boo</string>
+		</dict>
+		<dict>
+			<key>match</key>
+			<string>\+\=|-\=|\*\=|/\=|//\=|%\=|&amp;\=|\|\=|\^\=|&gt;&gt;\=|&lt;&lt;\=|\*\*\=</string>
+			<key>name</key>
+			<string>keyword.operator.assignment.augmented.boo</string>
+		</dict>
+		<dict>
+			<key>match</key>
+			<string>\+|\-|\*|\*\*|\b/\b|%|&lt;&lt;|&gt;&gt;|&amp;|\||\^|~</string>
+			<key>name</key>
+			<string>keyword.operator.arithmetic.boo</string>
+		</dict>
+		<dict>
+			<key>match</key>
+			<string>\=</string>
+			<key>name</key>
+			<string>keyword.operator.assignment.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
 			<string>(\(|\)|\[|\]|{|})</string>
 			<key>name</key>
-			<string>keyword.operator.source.boo</string>
+			<string>punctuation.boo</string>
 		</dict>
 		<dict>
 			<key>begin</key>
@@ -52,7 +127,7 @@
 			<key>end</key>
 			<string>\n</string>
 			<key>name</key>
-			<string>comment.line.source.boo</string>
+			<string>comment.line.boo</string>
 		</dict>
 		<dict>
 			<key>begin</key>
@@ -60,19 +135,19 @@
 			<key>end</key>
 			<string>\*/</string>
 			<key>name</key>
-			<string>comment.block.source.boo</string>
+			<string>comment.block.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
 			<string>\b\d+(\.\d+)?(f|F|L)?\b</string>
 			<key>name</key>
-			<string>constant.numeric.source.boo</string>
+			<string>constant.numeric.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
 			<string>\b(true|false|null|value)\b</string>
 			<key>name</key>
-			<string>constant.language.source.boo</string>
+			<string>constant.language.boo</string>
 		</dict>
 		<dict>
 			<key>begin</key>
@@ -80,7 +155,7 @@
 			<key>end</key>
 			<string>'</string>
 			<key>name</key>
-			<string>string.quoted.single.source.boo</string>
+			<string>string.quoted.single.boo</string>
 		</dict>
 		<dict>
 			<key>begin</key>
@@ -88,7 +163,7 @@
 			<key>end</key>
 			<string>"</string>
 			<key>name</key>
-			<string>string.quoted.double.source.boo</string>
+			<string>string.quoted.double.boo</string>
 		</dict>
 		<dict>
 			<key>begin</key>
@@ -96,7 +171,7 @@
 			<key>end</key>
 			<string>"""</string>
 			<key>name</key>
-			<string>string.quoted.double.source.boo</string>
+			<string>string.quoted.triple.boo</string>
 		</dict>
 		<dict>
 			<key>begin</key>
@@ -104,61 +179,62 @@
 			<key>end</key>
 			<string>`</string>
 			<key>name</key>
-			<string>string.quoted.backtick.source.boo</string>
+			<string>string.quoted.backtick.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
 			<string>\b(sbyte|short|int|long|byte|ushort|uint|ulong|single|double|decimal|char|string|bool|object|duck)\b</string>
 			<key>name</key>
-			<string>storage.type.source.boo</string>
+			<string>storage.type.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
 			<string>\b(public|protected|internal|private|abstract|final|static|partial)\b</string>
 			<key>name</key>
-			<string>storage.modifier.source.boo</string>
+			<string>storage.modifier.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
 			<string>\b(self|super)\b</string>
 			<key>name</key>
-			<string>variable.language.source.boo</string>
+			<string>variable.language.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
 			<string>\b(print|gets|prompt|join|map|array|matrix|iterator|shellp|shell|shellm|enemurate|range|reversed|zip|cat|typeof)\b</string>
 			<key>name</key>
-			<string>support.function.source.boo</string>
+			<string>support.function.builtin.boo</string>
 		</dict>
 		<dict>
+			<key>match</key>
+			<string>\b([a-z_]+[A-Za-z_0-9]*(\s+as\s+([A-Za-z0-9_]+)))\b</string>
 			<key>captures</key>
 			<dict>
 				<key>1</key>
 				<dict>
 					<key>name</key>
-					<string>variable.parameter.source.boo</string>
+					<string>variable.parameter.boo</string>
 				</dict>
 				<key>2</key>
 				<dict>
 					<key>name</key>
-					<string>keyword.operator.source.boo</string>
+					<string>keyword.operator.cast.boo</string>
 				</dict>
 				<key>3</key>
 				<dict>
 					<key>name</key>
-					<string>storage.type.source.boo</string>
+					<string>storage.type.boo</string>
 				</dict>
 			</dict>
-			<key>match</key>
-			<string>\b([a-z_]+[A-Za-z_0-9]*( as ([A-Z]+[A-Za-z]*)))\b</string>
 		</dict>
 		<dict>
 			<key>match</key>
-			<string>\b[a-z_]+[A-Za-z_0-9]*[^\[]\b</string>
+			<string>\b[a-z_]+[A-Za-z_0-9]*\b</string>
 			<key>name</key>
-			<string>variable.source.boo</string>
+			<string>variable.boo</string>
 		</dict>
 	</array>
+
 	<key>uuid</key>
 	<string>86814aa0-4b60-11e2-bcfd-0800200c9a66</string>
 </dict>

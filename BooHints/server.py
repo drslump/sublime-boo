@@ -104,7 +104,8 @@ class Server(object):
                 line = self.proc.stdout.readline()
                 if 0 == len(line):
                     break
-                elif line[0] == '#':
+                line = line.rstrip()
+                if line[0] == '#':
                     logger.debug(line[1:])
                 else:
                     self.queue.put(line)
@@ -118,7 +119,8 @@ class Server(object):
                 line = self.proc.stderr.readline()
                 if 0 == len(line):
                     break
-                elif line[0] == '#':
+                line = line.rstrip()
+                if line[0] == '#':
                     logger.debug(line[1:])
                 else:
                     logger.error(line)
@@ -146,6 +148,8 @@ class Server(object):
         )
         #logger.debug('Query: %s', query)
 
+        # Use a lock to sequence the commands to the child process in order to
+        # avoid mixed results in the output.
         with self.lock:
             # Make sure we have a server running
             self.start()

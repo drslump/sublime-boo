@@ -20,4 +20,10 @@
         {"key": "boo_supported_language"},
         {"key": "boo_is_code"}
     ]
+}, {
+    "keys": ["super+f2"],
+    "command": "boo_outline",
+    "context": [
+        {"key": "boo_supported_language"}
+    ]
 }]

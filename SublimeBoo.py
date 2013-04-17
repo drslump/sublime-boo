@@ -12,6 +12,10 @@
         Sublime does not adapt or allows to set a custom width for the autocompletion popup. Use this hack
         at your own risk to make it wider:
         http://www.sublimetext.com/forum/viewtopic.php?f=2&t=10250&sid=06199658f60d16947bf4131ec146e16b#p40640
+
+    Todo:
+
+        - Clean global state when a view is closed
 """
 
 import sys
@@ -39,9 +43,6 @@ log_handler = logging.StreamHandler(sys.stdout)
 log_handler.setFormatter(logging.Formatter('[%(name)s] %(levelname)s: %(message)s'))
 logger.addHandler(log_handler)
 
-
-# After the given seconds of inactivity the server process will be terminated
-SERVER_TIMEOUT = 300
 
 LANGUAGE_REGEX = re.compile("(?<=source\.)[\w+\-#]+")
 IMPORT_REGEX = re.compile(r'^import\s+([\w\.]+)?|^from\s+([\w\.]+)?')
@@ -250,6 +251,8 @@ def query_async(callback, view, command, delay=0, **kwargs):
     """ Helper to issue commands asynchronously
     """
     def wrapper(result):
+        # We need to route the actual callback via set_timeout
+        # since it's the only sublime API which is thread safe
         sublime.set_timeout(lambda: callback(result), delay)
 
     server(view).query_async(wrapper, command, **kwargs)
@@ -262,7 +265,13 @@ def refresh_globals(view, delay=0):
         _GLOBALS[view.id()] = result['hints']
 
     if get_setting('globals_complete'):
-        query_async(callback, view, 'globals', delay=delay, fname=view.file_name(), code=get_code(view))
+        query_async(
+            callback,
+            view,
+            'globals',
+            delay=delay,
+            fname=view.file_name(),
+            code=get_code(view))
 
 
 def refresh_lint(view, delay=0):
@@ -282,7 +291,7 @@ def refresh_lint(view, delay=0):
             result,
             'boo.{0}'.format(key[:-1]),  # Here we use the singular form
             mark,
-            sublime.HIDDEN | sublime.PERSISTENT
+            sublime.HIDDEN  # | sublime.PERSISTENT
         )
 
     def callback(result):
@@ -303,7 +312,8 @@ def refresh_lint(view, delay=0):
         'parse',
         fname=view.file_name(),
         code=get_code(view),
-        delay=delay)
+        delay=delay,
+        params=[True])  # Set to False to use a faster parser
 
 
 def update_status(view):
@@ -361,6 +371,20 @@ class BooEventListener(sublime_plugin.EventListener):
         if get_setting('parse_on_save', True):
             refresh_lint(view)
 
+    def on_close(self, view):
+        """ Clean up caches when closing a view
+        """
+        if not is_supported_language(view):
+            return
+
+        view_id = view.id()
+        if view_id in _GLOBALS:
+            del _GLOBALS[view_id]
+        if view_id in _LINTS:
+            del _LINTS[view_id]
+        if view_id in _RESULT:
+            del _RESULT[view_id]
+
     def on_selection_modified(self, view):
         """ Every time we move the cursor we update the status
         """
@@ -369,34 +393,37 @@ class BooEventListener(sublime_plugin.EventListener):
 
     def on_query_completions(self, view, prefix, locations):
 
+        if not is_supported_language(view) or not view.file_name():
+            return
+
+        offset = -1
+        line = ''
+        hints = []
+
         def prepare_result(offset, hints):
             hints = normalize_hints(hints)
-            _RESULT[view.id()] = (offset, view.substr(view.word(offset)), hints)
+            _RESULT[view.id()] = (offset, line, hints)
             logger.debug('QueryCompletion: %d', (time.time()-start)*1000)
             return hints
 
-        if not is_supported_language(view):
-            return
-
         start = time.time()
-        hints = []
 
         # Find a preceding non-word character in the line
         offset = locations[0]
         if view.substr(offset-1) not in '.':
             offset = view.word(offset).a
 
-        # Try to optimize by comparing with the last execution
-        last_offset, last_word, last_result = _RESULT.get(view.id(), (-1, None, None))
-        if last_offset == offset and last_word == view.substr(view.word(offset)):
-            logger.debug('Reusing last result')
-            return last_result
-
         # TODO: Most of the stuff below could be refactored to use without sublime
 
         # Obtain the string from the start of the line until the caret
         line = view.substr(sublime.Region(view.line(offset).a, offset))
         logger.debug('Line: "%s"', line)
+
+        # Try to optimize by comparing with the last execution
+        last_offset, last_line, last_result = _RESULT.get(view.id(), (-1, None, None))
+        if last_offset == offset and last_line == line:
+            logger.debug('Reusing last result')
+            return last_result
 
         # Manage auto completion on import statements
         matches = IMPORT_REGEX.search(line)

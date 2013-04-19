@@ -26,4 +26,11 @@
     "context": [
         {"key": "boo_supported_language"}
     ]
+}, {
+    "keys": ["super+f1"],
+    "command": "boo_show_info",
+    "context": [
+        {"key": "boo_supported_language"},
+        {"key": "boo_is_code"}
+    ]
 }]

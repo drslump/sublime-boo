@@ -1,5 +1,8 @@
 """
 Implements an interface with the Boo compiler hints server.
+
+TODO: Explore YouCompleteMe to easily create a Vim plugin
+TODO: Silly parser for .booproj files if no rsp is found
 """
 
 import os
@@ -121,7 +124,7 @@ class Server(object):
                     break
                 line = line.rstrip()
                 if line[0] == '#':
-                    logger.debug(line[1:])
+                    logger.warning(line[1:])
                 else:
                     logger.error(line)
         finally:
@@ -136,11 +139,8 @@ class Server(object):
             pass
 
     def query(self, command, **kwargs):
-        kwargs['command'] = command
-
-        logger.debug('Querying request for %s', command)
-
         # Issue the command
+        kwargs['command'] = command
         query = json.dumps(
             kwargs,
             check_circular=False,  # Try to make it a bit faster
@@ -150,11 +150,10 @@ class Server(object):
 
         # Use a lock to sequence the commands to the child process in order to
         # avoid mixed results in the output.
+        # TODO: Use a priority Queue to serialize sync/async operations
         with self.lock:
             # Make sure we have a server running
             self.start()
-
-            logger.debug('Querying %s to server %s', command, self.proc.pid)
 
             # Reset the response queue
             self.reset_queue()
@@ -171,8 +170,6 @@ class Server(object):
                 logger.error(str(ex), exc_info=True)
             finally:
                 self.reset_queue()
-
-            logger.debug('Querying %s finished', command)
 
             return resp
 

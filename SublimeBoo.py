@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
     Settings:
 
@@ -26,7 +27,7 @@ import logging
 import sublime
 import sublime_plugin
 
-from BooHints import get_server
+from BooHints import get_server, reset_servers, format_method, format_type
 
 
 # HACK: Prevent crashes with broken pipe signals
@@ -39,9 +40,12 @@ except ValueError:
 # Setup logging to use Sublime's console
 logger = logging.getLogger('boo')
 logger.setLevel(logging.DEBUG)
-log_handler = logging.StreamHandler(sys.stdout)
-log_handler.setFormatter(logging.Formatter('[%(name)s] %(levelname)s: %(message)s'))
-logger.addHandler(log_handler)
+# Hack: Check if we are reloading the plugin
+if not getattr(logger, '__sublime_initialized', None):
+    logger.__sublime_initialized = True
+    log_handler = logging.StreamHandler(sys.stdout)
+    log_handler.setFormatter(logging.Formatter('[%(name)s] %(levelname)s: %(message)s'))
+    logger.addHandler(log_handler)
 
 
 LANGUAGE_REGEX = re.compile("(?<=source\.)[\w+\-#]+")
@@ -51,20 +55,6 @@ AS_REGEX = re.compile(r'(\sas|\sof|\[of)\s$')
 PARAMS_REGEX = re.compile(r'(def|do)(\s\w+)?\s*\([\w\s,\*]*$')
 TYPE_REGEX = re.compile(r'^\s*(class|struct)\s')
 
-TYPESMAP = {
-    'Void': 'void',
-    'Boolean': 'bool',
-    'Int32': 'int',
-    'Int64': 'long',
-    'System.Object': 'object',
-    'System.String': 'string',
-    'System.String[]': 'string[]',
-    'System.Char[]': 'char[]',
-    'System.Array': 'array',
-    'Boo.Lang.List`1[System.Object]': 'List[object]',
-    'System.Type': 'Type',
-    'BooJs.Lang.Globals.Object': 'object',
-}
 
 PRIMITIVES = (
     ('void\tprimitive', 'void'),
@@ -102,24 +92,6 @@ _GLOBALS = {}
 _LINTS = {}
 # Keeps a cache of the last result associated to a view id
 _RESULT = {}
-
-
-def maptype(t):
-    if not t:
-        return ''
-
-    if t in TYPESMAP:
-        return TYPESMAP[t]
-
-    # Process special types
-    if t.startswith('System.Nullable[of '):
-        t = t[len('System.Nullable[of '):-1]
-        return TYPESMAP.get(t, t) + '?'
-    if t.startswith('Boo.Lang.List[of '):
-        t = t[len('Boo.Lang.List[of '):-1]
-        return 'List[' + TYPESMAP.get(t, t) + ']'
-
-    return t
 
 
 def server(view):
@@ -170,31 +142,7 @@ def query_locals(view, offset=None):
     return convert_hints(resp['hints'])
 
 
-def query_globals(view):
-    resp = server(view).query(
-        'globals',
-        fname=view.file_name(),
-        code=get_code(view)
-    )
-
-    hints = []
-    for h in resp['hints']:
-        name, node, info = (h['name'], h['node'], h.get('info'))
-
-        if name[-5:] == 'Macro':
-            lower = name[0:-5].lower()
-            hints.append(('{0}\tmacro'.format(lower), lower + ' '))
-
-        if name[-9:] == 'Attribute':
-            lower = name[0:-9].lower()
-            hints.append(('{0}\tattribute'.format(lower), lower))
-
-        hints.append(convert_hint(h))
-
-    return hints
-
-
-def query_members(view, offset=None, code=None, line=None):
+def query_members(view, offset=None, code=None, line=None, **kwargs):
     # Get current cursor position and obtain its row number (1 based)
     if offset is None:
         offset = view.sel()[0].a
@@ -206,17 +154,17 @@ def query_members(view, offset=None, code=None, line=None):
         fname=view.file_name(),
         code=code or get_code(view),
         offset=offset,
-        line=line)
+        line=line,
+        **kwargs)
 
     return convert_hints(resp['hints'])
 
 
 def convert_hint(hint):
-    name, node, info = (hint['name'], hint['node'], hint.get('info'))
+    name, node, type_, info = (hint['name'], hint['node'], hint.get('type'), hint.get('info'))
 
     if node == 'Method':
-        ret = info.split('): ')[-1]
-        desc = '{0}()\t{1}'.format(name, maptype(ret))
+        desc = '{0}()\t{1}'.format(name, format_type(type_, True))
         name = name + '($1)$0'
     elif node == 'Namespace':
         desc = '{0}\tnamespace'.format(name)
@@ -224,7 +172,7 @@ def convert_hint(hint):
         info = ' '.join(info.split(',')).lower()
         desc = '{0}\t{1}'.format(name, info)
     else:
-        desc = '{0}\t{1}'.format(name, maptype(info))
+        desc = '{0}\t{1}'.format(name, format_type(type_, True))
 
     return (desc, name)
 
@@ -248,7 +196,7 @@ def normalize_hints(hints):
 
 
 def query_async(callback, view, command, delay=0, **kwargs):
-    """ Helper to issue commands asynchronously
+    """ Helper to issue commands asynchronously in sublime
     """
     def wrapper(result):
         # We need to route the actual callback via set_timeout
@@ -313,18 +261,95 @@ def refresh_lint(view, delay=0):
         fname=view.file_name(),
         code=get_code(view),
         delay=delay,
-        params=[True])  # Set to False to use a faster parser
+        extra=True)  # Set to False to use a faster parser
 
 
 def update_status(view):
     """ Updates the status bar with parser hints
     """
+    sel = view.sel()
+    # Nothing to do if we have multiple selections
+    if len(sel) > 1:
+        return
+    sel = sel[0]
+    # Nothing to do if we are selecting text
+    if sel.a != sel.b:
+        return
+
+    ofs = sel.a
+
+    # Apply linting information
     lints = _LINTS.get(view.id(), {})
-    ln = view.rowcol(view.sel()[-1].b)[0]
+    ln = view.rowcol(ofs)[0]
     if ln in lints:
-        view.set_status('Boo', lints[ln])
+        view.set_status('boo.lint', lints[ln])
     else:
-        view.erase_status('Boo')
+        view.erase_status('boo.lint')
+
+    # TODO: Use syntax identifiers to discard the operation for keywords/strings/comments?
+
+    def callback(resp):
+        if not len(resp['hints']):
+            view.erase_status('boo.signature')
+            return
+
+        hint = resp['hints'][0]
+        if hint['node'] == 'Method':
+            sign = format_method(hint, u'Ⓜ ({params}): {return}', '{name}: {type}')
+            view.set_status('boo.signature', sign)
+        elif hint['node'] == 'Namespace':
+            view.set_status('boo.signature', u'Ⓝ ' + hint['full'])
+        elif hint['node'] == 'Type':
+            view.set_status('boo.signature', u'Ⓒ ' + hint['full'])
+        else:
+            view.set_status('boo.signature', '<' + hint['node'] + ': ' + hint['type'] + '>')
+
+    ch = view.substr(ofs)
+    word = view.substr(view.word(ofs)).rstrip('\r\n')
+    if ch == '.':
+        view.erase_status('boo.signature')
+        return
+    elif ch in (' ', ',', '(', ')'):
+        # Silly algorithm to detect if we are in the middle of a method call
+        # If there are more parens open than closed (unbalanced) remove all the
+        # ones balanced.
+        line = view.substr(sublime.Region(view.line(ofs).a, ofs))
+        print 'L "%s"' % line
+        unbalanced = 1
+        idx = len(line)
+        while unbalanced > 0 and idx > 0:
+            idx -= 1
+            if line[idx] == '(':
+                unbalanced -= 1
+            elif line[idx] == ')':
+                unbalanced += 1
+
+        if unbalanced != 0:
+            view.erase_status('boo.signature')
+            return
+
+        ofs = ofs - len(line) + idx
+        ofs = view.word(ofs).a
+
+    elif word.isalnum() and word not in ('if', 'elif', 'else', 'for', 'while', 'try', 'except', 'ensure', 'def', 'class', 'struct', 'interface', 'continue', 'return', 'yield', 'true', 'false', 'null', 'in', 'of'):
+        ofs = view.word(ofs).a
+
+    else:
+        view.erase_status('boo.signature')
+        return
+
+    # TODO: Cache last result
+    row, col = view.rowcol(ofs)
+    query_async(
+        callback,
+        view,
+        'entity',
+        fname=view.file_name(),
+        code=get_code(view),
+        line=row + 1,
+        column=col + 1,
+        extra=True
+    )
 
 
 def is_supported_language(view):
@@ -338,6 +363,15 @@ def is_supported_language(view):
 
 
 class BooEventListener(sublime_plugin.EventListener):
+
+    def __init__(self):
+        self._initialized = set()
+
+        # Hack: We use the constructor to detect when the plugin reloads
+        reset_servers()
+        _LINTS.clear()
+        _GLOBALS.clear()
+        _RESULT.clear()
 
     def on_query_context(self, view, key, operator, operand, match_all):
         """ Resolves context queries for keyboard bindings
@@ -353,13 +387,23 @@ class BooEventListener(sublime_plugin.EventListener):
 
         return False
 
-    def on_load(self, view):
-        if not is_supported_language(view):
-            return
+    def on_activated(self, view):
+        # On first activation after loading a view refresh caches. If we
+        # use load we may stall the editor when it's started with a lot
+        # of already opened files
+        def initialize():
+            if view.id() in self._initialized:
+                return
+            if view.is_loading():
+                sublime.set_timeout(initialize, 100)
+                return
+            elif is_supported_language(view):
+                logger.debug('Initializing view %d', view.id())
+                self._initialized.add(view.id())
+                refresh_globals(view)
+                refresh_lint(view)
 
-        # Get hints for globals
-        refresh_globals(view)
-        refresh_lint(view)
+        initialize()
 
     def on_post_save(self, view):
         if not is_supported_language(view):
@@ -457,6 +501,7 @@ class BooEventListener(sublime_plugin.EventListener):
             hints += convert_hints(_GLOBALS.get(view.id(), []))
         # When naming stuff or inside parameters definition disable hints
         elif NAMED_REGEX.search(line) or PARAMS_REGEX.search(line):
+            # TODO: offer completions for public properties?
             logger.debug('NAMED or PARAMS')
             hints = []
         else:

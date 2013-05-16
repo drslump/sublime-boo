@@ -15,10 +15,23 @@
         http://www.sublimetext.com/forum/viewtopic.php?f=2&t=10250&sid=06199658f60d16947bf4131ec146e16b#p40640
 
     Todo:
+        - alt+space quick panel:
+            - between parens offer options for target method
+            - at end of word boundary: auto complete symbol
 
-        - Clean global state when a view is closed
+    Future:
+        - Implement a "navigation" quick panel:
+            - Keep history of jumps and show a "Go back to..."
+            - Show all reported lints in the file
+            - Show namespaces to browse them
+        - Prompt panel:
+            - insert import ?
+        - Sticky info panel that keep getting updated with the current entity
+        - Help command that shows the plugin help
+        - Command to show declaration in panel instead of jumping
+        - ST3 has a view.show_popup_menu(items, onselect) API
+        - Add support for "literate boo" .litboo / .boo.md
 """
-
 import sys
 import re
 import time
@@ -27,8 +40,13 @@ import logging
 import sublime
 import sublime_plugin
 
-from BooHints import get_server, reset_servers, format_method, format_type
+from .BooHints import get_server, reset_servers, format_type, format_method, find_open_paren
 
+# Try to reload dependencies (useful while developing the plugin)
+from imp import reload
+mod_prefix = '.'.join(__name__.split('.')[:-1])
+for mod in ('BooHints', 'BooHints.server'):
+    reload(sys.modules[mod_prefix + '.' + mod])
 
 # HACK: Prevent crashes with broken pipe signals
 try:
@@ -49,43 +67,16 @@ if not getattr(logger, '__sublime_initialized', None):
 
 
 LANGUAGE_REGEX = re.compile("(?<=source\.)[\w+\-#]+")
-IMPORT_REGEX = re.compile(r'^import\s+([\w\.]+)?|^from\s+([\w\.]+)?')
-NAMED_REGEX = re.compile(r'\b(class|struct|enum|macro|def)\s$')
-AS_REGEX = re.compile(r'(\sas|\sof|\[of)\s$')
-PARAMS_REGEX = re.compile(r'(def|do)(\s\w+)?\s*\([\w\s,\*]*$')
-TYPE_REGEX = re.compile(r'^\s*(class|struct)\s')
+IMPORT_REGEX = re.compile(r'^(import|from)\s')
 
-
-PRIMITIVES = (
-    ('void\tprimitive', 'void'),
-    ('object\tprimitive', 'object'),
-    ('bool\tprimitive', 'bool'),
-    ('int\tprimitive', 'int'),
-    ('double\tprimitive', 'double'),
-    ('string\tprimitive', 'string'),
-
-    ('System\tnamespace', 'System')
-)
-
-BUILTINS = (
-    ('assert\tmacro', 'assert '),
-    ('print\tmacro', 'print '),
-    ('trace\tmacro', 'trace '),
-
-    ('len()\tint', 'len(${1:array})$0'),
-    ('join()\tstring', 'join(${1:array}, ${2:string})$0'),
-    ('range()\tarray', 'range(${1:int})$0'),
-
-    ('self', 'self'),
-    ('super', 'super'),
-    ('System\tnamespace', 'System')
-)
 
 IGNORED = (
     'Equals()\tbool',
     'ReferenceEquals()\tbool',
 )
 
+# Keeps cached hints for builtin symbols associated to a view id
+_BUILTINS = {}
 # Keeps cached hints for global symbols associated to a view id
 _GLOBALS = {}
 # Keeps the last messages returned by the parse command associated to a view id
@@ -142,37 +133,73 @@ def query_locals(view, offset=None):
     return convert_hints(resp['hints'])
 
 
-def query_members(view, offset=None, code=None, line=None, **kwargs):
+def query_complete(view, offset=None, code=None, line=None, skip_globals=True, **kwargs):
     # Get current cursor position and obtain its row number (1 based)
     if offset is None:
         offset = view.sel()[0].a
     if line is None:
         line = view.rowcol(offset)[0] + 1
+    if code is None:
+        code = get_code(view)
 
     resp = server(view).query(
-        'members',
+        'complete',
         fname=view.file_name(),
         code=code or get_code(view),
         offset=offset,
         line=line,
+        params=(skip_globals,),
         **kwargs)
 
-    return convert_hints(resp['hints'])
+    return resp['scope'], resp['hints']
+
+
+def symbol_for(hint):
+    SYMBOL_MAP = {
+        'Method': u'ƒ',
+        'Namespace': u'η',
+        'Property': u'ρ',
+        'Event': u'ɘ',
+        'Field': u'ʇ',
+        'Local': u'ʟ',
+        'Parameter': u'ʟ',
+        'Ambiguous': u'⸮',
+        'Type': u'τ',
+        'Type.class': u'ϲ',
+        'Type.interface': u'ɪ',
+        'Type.struct': u'ƨ',
+        'Type.enum': u'ǝ',
+    }
+
+    if hint['node'] == 'Type':
+        flags = set(x.strip() for x in hint['info'].split(','))
+        flags = flags & set(('class', 'interface', 'struct', 'enum'))
+        if len(flags):
+            return SYMBOL_MAP.get('Type.' + flags.pop())
+
+    return SYMBOL_MAP.get(hint['node'], '?')
 
 
 def convert_hint(hint):
     name, node, type_, info = (hint['name'], hint['node'], hint.get('type'), hint.get('info'))
 
-    if node == 'Method':
-        desc = '{0}()\t{1}'.format(name, format_type(type_, True))
-        name = name + '($1)$0'
-    elif node == 'Namespace':
-        desc = '{0}\tnamespace'.format(name)
+    if node == 'Namespace':
+        desc = name
     elif node == 'Type':
-        info = ' '.join(info.split(',')).lower()
-        desc = '{0}\t{1}'.format(name, info)
+        flags = set(x.strip() for x in info.split(','))
+        flags = flags - set(('class', 'interface', 'struct', 'event', 'value'))
+        desc = '{0}\t{1}'.format(name, ' '.join(flags))
+    elif node == 'Macro':
+        desc = '{0}\t{1}'.format(name, 'macro')
+        name = name + ' '
+    elif node == 'Ambiguous':
+        desc = '{0} (x{1})\t{2}'.format(name, info, format_type(type_, True))
     else:
         desc = '{0}\t{1}'.format(name, format_type(type_, True))
+
+    symbol = symbol_for(hint)
+    if symbol:
+        desc = u'{0} {1}'.format(symbol, desc)
 
     return (desc, name)
 
@@ -184,7 +211,7 @@ def convert_hints(hints):
 def normalize_hints(hints):
     # Remove ignored and duplicates (overloads are not shown for autocomplete)
     seen = set()
-    hints = [x for x in hints if x[1] not in IGNORED and x[1] not in seen and not seen.add(x[1])]
+    #hints = [x for x in hints if x[1] not in IGNORED and x[1] not in seen and not seen.add(x[1])]
 
     # Sort by symbol
     hints.sort(key=lambda x: x[1])
@@ -204,6 +231,22 @@ def query_async(callback, view, command, delay=0, **kwargs):
         sublime.set_timeout(lambda: callback(result), delay)
 
     server(view).query_async(wrapper, command, **kwargs)
+
+
+def refresh_builtins(view, delay=0):
+    """ Refresh hints for builtin symbols asynchronously
+    """
+    def callback(result):
+        _BUILTINS[view.id()] = result['hints']
+
+    query_async(
+        callback,
+        view,
+        'builtins',
+        delay=delay,
+        fname=view.file_name(),
+        code=''
+    )
 
 
 def refresh_globals(view, delay=0):
@@ -252,7 +295,7 @@ def refresh_lint(view, delay=0):
         process(_LINTS[view_id], result, 'warnings', 'dot')
         process(_LINTS[view_id], result, 'errors', 'circle')
 
-        update_status(view)
+        #update_status(view)
 
     query_async(
         callback,
@@ -264,6 +307,9 @@ def refresh_lint(view, delay=0):
         extra=True)  # Set to False to use a faster parser
 
 
+# TODO: This should be run at a fixed interval to avoid computing the offset
+#       each time we move the cursor.
+CACHE = {'last_offset': -1, 'last_change': None}
 def update_status(view):
     """ Updates the status bar with parser hints
     """
@@ -295,14 +341,12 @@ def update_status(view):
 
         hint = resp['hints'][0]
         if hint['node'] == 'Method':
-            sign = format_method(hint, u'Ⓜ ({params}): {return}', '{name}: {type}')
+            sign = format_method(hint, symbol_for(hint) + ' ({params}): {return}', '{name}: {type}')
             view.set_status('boo.signature', sign)
-        elif hint['node'] == 'Namespace':
-            view.set_status('boo.signature', u'Ⓝ ' + hint['full'])
-        elif hint['node'] == 'Type':
-            view.set_status('boo.signature', u'Ⓒ ' + hint['full'])
+        elif hint['node'] in ('Namespace', 'Type'):
+            view.set_status('boo.signature', symbol_for(hint) + ' ' + hint['full'])
         else:
-            view.set_status('boo.signature', '<' + hint['node'] + ': ' + hint['type'] + '>')
+            view.set_status('boo.signature', symbol_for(hint) + ' ' + hint['type'])
 
     ch = view.substr(ofs)
     word = view.substr(view.word(ofs)).rstrip('\r\n')
@@ -310,27 +354,11 @@ def update_status(view):
         view.erase_status('boo.signature')
         return
     elif ch in (' ', ',', '(', ')'):
-        # Silly algorithm to detect if we are in the middle of a method call
-        # If there are more parens open than closed (unbalanced) remove all the
-        # ones balanced.
-        line = view.substr(sublime.Region(view.line(ofs).a, ofs))
-        print 'L "%s"' % line
-        unbalanced = 1
-        idx = len(line)
-        while unbalanced > 0 and idx > 0:
-            idx -= 1
-            if line[idx] == '(':
-                unbalanced -= 1
-            elif line[idx] == ')':
-                unbalanced += 1
-
-        if unbalanced != 0:
+        idx = find_open_paren(view.substr(sublime.Region(0, ofs)), open='([', close=')]')
+        if idx is None:
             view.erase_status('boo.signature')
             return
-
-        ofs = ofs - len(line) + idx
-        ofs = view.word(ofs).a
-
+        ofs = view.word(idx).a
     elif word.isalnum() and word not in ('if', 'elif', 'else', 'for', 'while', 'try', 'except', 'ensure', 'def', 'class', 'struct', 'interface', 'continue', 'return', 'yield', 'true', 'false', 'null', 'in', 'of'):
         ofs = view.word(ofs).a
 
@@ -338,18 +366,26 @@ def update_status(view):
         view.erase_status('boo.signature')
         return
 
-    # TODO: Cache last result
-    row, col = view.rowcol(ofs)
-    query_async(
-        callback,
-        view,
-        'entity',
-        fname=view.file_name(),
-        code=get_code(view),
-        line=row + 1,
-        column=col + 1,
-        extra=True
-    )
+    if ofs != CACHE['last_offset']:
+        logger.debug('Caching last offset')
+        CACHE['last_offset'] = ofs
+        CACHE['last_change'] = time.time()
+        #sublime.set_timeout(lambda: update_status(view), 300)
+    else:
+        if CACHE['last_change'] and time.time() - CACHE['last_change'] > 0.25:
+            CACHE['last_change'] = None
+            logger.debug('Updating status')
+            row, col = view.rowcol(ofs)
+            query_async(
+                callback,
+                view,
+                'entity',
+                fname=view.file_name(),
+                code=get_code(view),
+                line=row + 1,
+                column=col + 1,
+                extra=True
+            )
 
 
 def is_supported_language(view):
@@ -389,8 +425,8 @@ class BooEventListener(sublime_plugin.EventListener):
 
     def on_activated(self, view):
         # On first activation after loading a view refresh caches. If we
-        # use load we may stall the editor when it's started with a lot
-        # of already opened files
+        # used on_load we may stall the editor when it's started with a
+        # lot of files
         def initialize():
             if view.id() in self._initialized:
                 return
@@ -400,8 +436,17 @@ class BooEventListener(sublime_plugin.EventListener):
             elif is_supported_language(view):
                 logger.debug('Initializing view %d', view.id())
                 self._initialized.add(view.id())
+
+                refresh_builtins(view)
                 refresh_globals(view)
                 refresh_lint(view)
+
+                def refresh_status():
+                    update_status(view)
+                    sublime.set_timeout(refresh_status, 500)
+
+                #refresh_status()
+
 
         initialize()
 
@@ -424,6 +469,8 @@ class BooEventListener(sublime_plugin.EventListener):
         view_id = view.id()
         if view_id in _GLOBALS:
             del _GLOBALS[view_id]
+        if view_id in _BUILTINS:
+            del _BUILTINS[view_id]
         if view_id in _LINTS:
             del _LINTS[view_id]
         if view_id in _RESULT:
@@ -432,84 +479,65 @@ class BooEventListener(sublime_plugin.EventListener):
     def on_selection_modified(self, view):
         """ Every time we move the cursor we update the status
         """
-        if is_supported_language(view):
-            update_status(view)
+        if not is_supported_language(view):
+            return
+
+        # TODO: Obtain here the valid offset
+        #       Update lint info if line has changed
+        #       Set a short timeout, if it changed update entity (configurable)
+        #update_status(view)
 
     def on_query_completions(self, view, prefix, locations):
 
         if not is_supported_language(view) or not view.file_name():
             return
 
+        start = time.time()
+
+        vid = view.id()
         offset = -1
         line = ''
         hints = []
 
         def prepare_result(offset, hints):
             hints = normalize_hints(hints)
-            _RESULT[view.id()] = (offset, line, hints)
+            _RESULT[vid] = (offset, line, hints)
             logger.debug('QueryCompletion: %d', (time.time()-start)*1000)
             return hints
 
-        start = time.time()
-
-        # Find a preceding non-word character in the line
+        # Find a preceding non-ident character in the line
         offset = locations[0]
-        if view.substr(offset-1) not in '.':
+        if view.substr(offset-1).isalnum() or view.substr(offset-1) == '_':
             offset = view.word(offset).a
-
-        # TODO: Most of the stuff below could be refactored to use without sublime
 
         # Obtain the string from the start of the line until the caret
         line = view.substr(sublime.Region(view.line(offset).a, offset))
         logger.debug('Line: "%s"', line)
 
         # Try to optimize by comparing with the last execution
-        last_offset, last_line, last_result = _RESULT.get(view.id(), (-1, None, None))
+        last_offset, last_line, last_result = _RESULT.get(vid, (-1, None, None))
         if last_offset == offset and last_line == line:
             logger.debug('Reusing last result')
             return last_result
 
-        # Manage auto completion on import statements
-        matches = IMPORT_REGEX.search(line)
-        if matches:
-            ns = matches.group(1) or matches.group(2)
-            ns = ns.rstrip('.') + '.'
-
-            # Auto complete based on members from the detected namespace
-            resp = server(view).query(
-                'members',
-                fname='namespace.boo',
-                code=ns,
-                offset=len(ns))
-            hints = convert_hints(resp['hints'])
-
-            # Since we are modifying imports lets schedule a refresh of the globals
-            refresh_globals(view, 500)
-
-            return prepare_result(offset, hints)
-
-        # Check if we need globals, locals or member hints
-        ch = view.substr(offset - 1)
-        # A preceding dot always triggers member hints
-        if ch == '.':
-            logger.debug('DOT')
-            hints += query_members(view, offset)
-        # Type annotations and definitions only hint globals (for inheritance)
-        elif AS_REGEX.search(line) or TYPE_REGEX.search(line):
-            logger.debug('AS')
-            hints += PRIMITIVES
-            hints += convert_hints(_GLOBALS.get(view.id(), []))
-        # When naming stuff or inside parameters definition disable hints
-        elif NAMED_REGEX.search(line) or PARAMS_REGEX.search(line):
-            # TODO: offer completions for public properties?
-            logger.debug('NAMED or PARAMS')
+        scope, hints = query_complete(view, offset)
+        if scope == 'name':
             hints = []
+        elif scope == 'import':
+            # Schedule a refresh globals
+            refresh_globals(view, 2000)
+        elif scope == 'type':
+            # Filter out everything but types in globals
+            items = _BUILTINS.get(vid, []) + _GLOBALS.get(vid, [])
+            hints += (h for h in items if h['node'] in ('Type', 'Namespace'))
+        elif scope == 'members':
+            pass
+        elif scope == 'complete':
+            # Include builtins and globals
+            logger.info('Including builtins')
+            hints += _BUILTINS.get(vid, []) + _GLOBALS.get(vid, [])
         else:
-            logger.debug('ELSE')
-            hints += BUILTINS
-            hints += convert_hints(_GLOBALS.get(view.id(), []))
-            # Without a preceding dot members reports back the ones in the current
-            # type (self) and local entities
-            hints += query_members(view, offset)
+            logger.info('Unknown scope <%s>', scope)
 
+        hints = convert_hints(hints)
         return prepare_result(offset, hints)

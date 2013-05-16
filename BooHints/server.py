@@ -9,9 +9,13 @@ import os
 import subprocess
 import threading
 import json
-import Queue
 import time
 import logging
+# Work around Python 3 module renames
+try:
+    import queue
+except:
+    import Queue as queue
 
 logger = logging.getLogger('boo.server')
 
@@ -33,14 +37,25 @@ class Server(object):
         self.rsp = rsp
         self.timeout = timeout
         self.proc = None
-        self.queue = Queue.Queue()
+        self.results = queue.Queue()
+        self.async_queries = queue.Queue()
         self.lock = threading.Lock()
+        self._needs_restart = False
+
+        # Setup threads for reading results and errors
+        threading.Thread(target=self.thread_async).start()
+        threading.Thread(target=self.thread_stdout).start()
+        threading.Thread(target=self.thread_stderr).start()
 
     def start(self):
         self._last_usage = time.time()
 
+        if self._needs_restart:
+            self._needs_restart = False
+            logger.info('Restarting server...')
+            self.stop()
         # Nothing to do if already running
-        if self.is_alive():
+        elif self.is_alive():
             return
 
         args = list(self.args)
@@ -60,10 +75,6 @@ class Server(object):
             stdin=subprocess.PIPE
         )
 
-        # Setup threads for reading results and errors
-        threading.Thread(target=self.thread_stdout).start()
-        threading.Thread(target=self.thread_stderr).start()
-
         logger.info('Started hint server with PID %s using: %s',
                     self.proc.pid, ' '.join(args))
 
@@ -78,7 +89,7 @@ class Server(object):
             # Try to terminate the compiler gracefully
             try:
                 logger.info('Terminating hint server process %s', self.proc.pid)
-                self.proc.stdin.write("quit\n")
+                self.proc.stdin.write("quit\n".encode('utf-8'))
                 self.proc.terminate()
             except IOError:
                 pass
@@ -94,49 +105,74 @@ class Server(object):
             self.stop()
         # Run the check again after a timeout
         elif self.is_alive():
-            t = threading.Timer(self.timeout, self.check_timeout)
-            t.start()
+            threading.Timer(self.timeout, self.check_timeout).start()
 
     def is_alive(self):
-        return self.proc and self.proc.poll() is None
+        return self.proc and self.proc.poll() is None and hasattr(self.proc, 'stdin')
 
     def thread_stdout(self):
         """ Thread to consume stdout contents """
-        try:
-            while self.is_alive():
-                line = self.proc.stdout.readline()
-                if 0 == len(line):
-                    break
-                line = line.rstrip()
-                if line[0] == '#':
-                    logger.debug(line[1:])
+        while True:
+            if not self.is_alive():
+                time.sleep(0.1)
+                continue
+
+            line = self.proc.stdout.readline()
+            if 0 == len(line):
+                continue
+            line = line.decode('utf-8')
+            line = line.rstrip()
+            if line[0] == '#':
+                line = line[1:]
+                if line.startswith('!'):
+                    self.server_command(line[1:])
                 else:
-                    self.queue.put(line)
-        finally:
-            self.stop()
+                    logger.debug(line)
+            else:
+                self.results.put(line)
 
     def thread_stderr(self):
         """ Thread to consume stderr contents """
-        try:
-            while self.is_alive():
-                line = self.proc.stderr.readline()
-                if 0 == len(line):
-                    break
-                line = line.rstrip()
-                if line[0] == '#':
-                    logger.warning(line[1:])
-                else:
-                    logger.error(line)
-        finally:
-            self.stop()
+        while True:
+            if not self.is_alive():
+                time.sleep(0.1)
+                continue
 
-    def reset_queue(self):
+            line = self.proc.stderr.readline()
+            if 0 == len(line):
+                continue
+            line = line.decode('utf-8')                    
+            line = line.rstrip()
+            if len(line) and line[0] == '#':
+                logger.warning(line[1:])
+            else:
+                logger.error(line)
+                self.results.put(None)
+
+    def thread_async(self):
+        """ Thread to perform async queries """
+        while True:
+            callback, command, kwargs = self.async_queries.get()
+            resp = self.query(command, **kwargs)
+            callback(resp)    
+
+    def reset_queue(self, queue):
         """ Make sure the queue is empty """
         try:
             while True:
-                self.queue.get_nowait()
+                queue.get_nowait()
         except:
             pass
+
+    def server_command(self, line):
+        """ Answers server commands
+        """
+        if line.startswith('REFERENCE_MODIFIED'):
+            # Force a restart of the server as soon as possible
+            self._needs_restart = True
+            self.query_async(lambda x: x, 'parse', fname='reload', code='')
+        else:
+            logger.info('Unsupported server command: %s', line)
 
     def query(self, command, **kwargs):
         # Issue the command
@@ -145,31 +181,28 @@ class Server(object):
             kwargs,
             check_circular=False,  # Try to make it a bit faster
             separators=(',', ':')  # Make it more compact
-        )
-        #logger.debug('Query: %s', query)
+        ).encode('utf-8')
 
-        # Use a lock to sequence the commands to the child process in order to
+        # Uses a lock to sequence the commands to the child process in order to
         # avoid mixed results in the output.
-        # TODO: Use a priority Queue to serialize sync/async operations
         with self.lock:
             # Make sure we have a server running
             self.start()
 
             # Reset the response queue
-            self.reset_queue()
+            self.reset_queue(self.results)
 
-            self.proc.stdin.write("%s\n" % query)
-
-            # Wait for the results
+            # Send the query and wait for the results
+            self.proc.stdin.write(query + '\n'.encode('utf-8'))
             resp = None
             try:
-                resp = self.queue.get(timeout=5.0)
-                #logger.debug('Response: %s', resp)
-                resp = json.loads(resp)
+                resp = self.results.get(timeout=5.0)
+                if resp is not None:
+                    resp = json.loads(resp)
+            except queue.Empty as ex:
+                logger.error('Timeout waiting for query response')
             except Exception as ex:
                 logger.error(str(ex), exc_info=True)
-            finally:
-                self.reset_queue()
 
             return resp
 
@@ -177,9 +210,10 @@ class Server(object):
         """ Runs a query in a separate thread reporting the result via an
             argument to the supplied callback.
         """
-        def target():
-            result = self.query(command, **kwargs)
-            callback(result)
+        #def target():
+        #    result = self.query(command, **kwargs)
+        #    callback(result)
 
-        t = threading.Thread(target=target)
-        t.start()
+        #t = threading.Thread(target=target)
+        #t.start()
+        self.async_queries.put((callback, command, kwargs))

@@ -3,8 +3,8 @@ import re
 import sublime
 from sublime_plugin import TextCommand, WindowCommand
 
-from SublimeBoo import query_members, server, get_code
-from BooHints import format_type, format_method
+from .SublimeBoo import server, get_code, convert_hint
+from .BooHints import format_type, format_method, find_open_paren
 
 
 MEMBER_REGEX = re.compile(r'[\w\)\]]\.$')
@@ -12,10 +12,10 @@ WORD_REGEX = re.compile(r'^\w+$')
 
 
 class BooDotCompleteCommand(TextCommand):
-    """
-    Command triggered when the dot key is pressed to show the autocomplete popup
+    """ Command triggered when the dot key is pressed to show the autocomplete popup
     """
     def run(self, edit):
+        print('BooDot')
         # Insert the dot in the buffer
         for region in self.view.sel():
             self.view.insert(edit, region.end(), ".")
@@ -31,23 +31,67 @@ class BooDotCompleteCommand(TextCommand):
         self.view.run_command("auto_complete")
 
 
+class BooImportCommand(WindowCommand):
+    """ Include an additional import for a symbol into the file 
+        TODO:
+            - Use a quick panel to browse namespaces
+            - List already imported symbols too, if selected they are removed
+            - If importing show an input panel to define an alias, prefiled 
+              for types, empty or "*" for namespaces (import all)
+    """
+
+    def run(self):
+        self.input = None
+        self.input = self.window.show_input_panel(
+            'Import',
+            '',
+            self.on_done,
+            self.on_change,
+            self.on_cancel)
+
+    def on_done(self, text):
+        print('on_done', text)
+
+    def on_change(self, text):
+        print('on_change', text)
+        # First call may come before we register the view object
+        if not self.input:
+            return
+
+    def on_cancel(self):
+        pass
+
+
 class BooQuickPanelCompleteCommand(TextCommand):
 
     def run(self, edit):
+        self.edit = edit
         view = self.view
 
         # Find a preceding non-word character in the line
         offset = view.sel()[0].a
-        self.word = view.substr(view.word(offset)).rstrip()
-        if self.word.isalnum():
-            self.word = self.word.lower()
-            offset -= len(self.word)
+
+        word = view.word(offset)
+        self.prefix = view.substr(word)
+
+        # After a dot just autocomplete members
+        if word.a == offset-1 and self.prefix[0] == '.':
+            self.prefix = ''
+        # At the end of an ident autocomplete it
+        elif word.b == offset and self.prefix.isalnum():
+            offset = word.a
+        # Check if we are inside a call expression to report information about
+        # it and its overloads
         else:
-            self.word = ''
+            idx = find_open_paren(view.substr(sublime.Region(0, offset)), open='([', close=')]')
+            if idx is None:
+                return
 
-        # TODO: Obtain proper hints like we do on dot
-        # TODO: Work with entities so we can offer good signatures
+            word = view.word(idx)
+            offset = word.a
+            self.prefix = view.substr(word)
 
+        # Request member hints
         resp = server(view).query(
             'members',
             fname=view.file_name(),
@@ -56,6 +100,7 @@ class BooQuickPanelCompleteCommand(TextCommand):
             extra=True)
         hints = resp['hints']
 
+        # For not member references ask for globals
         if view.substr(offset-1) != '.':
             resp = server(view).query(
                 'globals',
@@ -64,61 +109,53 @@ class BooQuickPanelCompleteCommand(TextCommand):
                 extra=True)
             hints += resp['hints']
 
-        hints = [x for x in hints if x['name'].lower().startswith(self.word)]
+        # TODO: Why doesn't it work with locals?
+
+        # Filter out entities to those we are interested in
+        if len(self.prefix):
+            # If followed by a paren do an exact match
+            if view.substr(word.b) == '(':
+                rex = re.compile(re.escape(self.prefix) + '$')
+            else:
+                # Emulate sublime's fuzzy search with a regexp
+                #rex = re.compile(''.join('.*' + re.escape(ch) for ch in self.prefix), re.IGNORECASE)
+                # TODO: Filtering by actual prefix seems to feel better. Perhaps because the
+                #       ordering is very different from Sublime's weighted one.
+                rex = re.compile(re.escape(self.prefix), re.IGNORECASE)
+
+            hints = [x for x in hints if rex.match(x['name'])]
 
         # Ignore if there are no hints to show
         if not hints:
             return
 
         hints.sort(key=lambda x: x['name'])
-        #self.hints = convert_hints(_GLOBALS.get(view.id(), []))
 
         def format(hint):
+            # Reuse standard completion formatting for the title
+            # TODO: Refactor this to make it not a hack
+            desc, name = convert_hint(hint)
+
             # Note: Sublime expects lists not tuples
             if hint['node'] == 'Namespace':
                 return [
-                    hint['name'].ljust(100) + u'Ⓝ ',
+                    desc,
                     'namespace %s' % hint['full']
                 ]
             elif hint['node'] == 'Type':
-                if 'Class' in hint['info']:
-                    sym = u'Ⓒ '
-                elif 'Interface' in hint['info']:
-                    sym = u'Ⓘ '
-                elif 'Struct' in hint['info']:
-                    sym = u'Ⓢ '
-                elif 'Enum' in hint['info']:
-                    sym = u'Ⓔ '
-                else:
-                    sym = '  '
                 return [
-                    hint['name'].ljust(100) + sym,
+                    desc,
                     ' '.join([x.strip().lower() for x in sorted(hint['info'].split(','))]) + ' ' + hint['full']
                 ]
             elif hint['node'] == 'Method':
                 name = format_method(hint, '{name} ({params})', '{name}')
-                sign = format_method(hint, '({params}): {return}', '{type}')
+                sign = format_method(hint, 'def ({params}): {return}', '{type}')
                 return [
-                    name.ljust(100, ' ') + u'Ⓜ ',
+                    u'ƒ ' + name,
                     sign
                 ]
-            elif hint['node'] == 'Field':
-                return [
-                    hint['name'].ljust(100, ' ') + u'Ⓕ ',
-                    hint['type']
-                ]
-            elif hint['node'] == 'Property':
-                return [
-                    u'Ⓟ ' + hint['name'],
-                    hint['type']
-                ]
-            elif hint['node'] in ('Local', 'Parameter'):
-                return [
-                    hint['name'].ljust(100) + u'Ⓛ ',
-                    hint['type']
-                ]
 
-            return [hint['name'], hint['type']]
+            return [desc, '{0}: {1}'.format(hint['node'].lower(), hint['type'])]
 
         # Ignore constructors
         hints = [x for x in hints if x['node'] != 'Constructor']
@@ -126,7 +163,10 @@ class BooQuickPanelCompleteCommand(TextCommand):
         self.hints = hints
         hints = [format(x) for x in hints]
 
-        flags = sublime.MONOSPACE_FONT
+        #hints.insert(0, [u'↵ Go to parent namespace'])
+        #hints.insert(0, [u'⟳ System.Collections'])
+
+        flags = 0  # sublime.MONOSPACE_FONT
         selected = 0
         view.window().show_quick_panel(hints, self.on_select, flags, selected)
 
@@ -136,14 +176,121 @@ class BooQuickPanelCompleteCommand(TextCommand):
 
         hint = self.hints[idx]
         hint = hint['name']
-        if len(self.word) > 0:
-            hint = hint[len(self.word):]
+        hint = hint[len(self.prefix):]
 
         view = self.view
-        edit = view.begin_edit()
         for s in view.sel():
-            view.insert(edit, s.a, hint)
-        view.end_edit(edit)
+            view.insert(self.edit, s.a, hint)
+
+
+class BooBrowseNamespacesCommand(TextCommand):
+    """ Browse global namespaces
+    """
+    def run(self, edit):
+        view = self.view
+
+        self.list = []
+        items = []
+
+        resp = server(view).query(
+            'namespaces',
+            fname=view.file_name(),
+            code='',
+        )
+        from .SublimeBoo import symbol_for
+        seen = set()
+        for hint in resp['hints']:
+            if hint['full'] not in seen and hint['node'] == 'Namespace':
+                seen.add(hint['full'])
+                self.list.append(hint['full'])
+                items.append([
+                    u'{0} {1}'.format(symbol_for(hint), hint['full']),
+                ])
+
+        view.window().show_quick_panel(items, self.on_select)
+
+    def on_select(self, idx):
+        if idx >= 0:
+            sublime.set_timeout(lambda: self.browse(self.list[idx]), 1)
+
+    def browse(self, fullname):
+        self.list = [
+            '.'.join(fullname.split('.')[:-1]),
+            fullname,
+        ]
+        items = [
+            [u'⇧ Go to parent namespace'],
+            [u'⟳ ' + fullname],
+        ]
+
+        resp = server(self.view).query(
+            'members',
+            fname=self.view.file_name(),
+            code='{0}.'.format(fullname),
+            offset=len(fullname)+1,
+            extra=True
+        )
+
+        from .SublimeBoo import symbol_for
+        for hint in resp['hints']:
+            self.list.append(hint['full'])
+            items.append([
+                '{0} {1}'.format(symbol_for(hint), hint['name'])
+            ])
+
+
+        self.view.window().show_quick_panel(items, self.on_select)
+
+
+class BooNavigateCommand(TextCommand):
+    """ Navigates symbols, errors and namespaces
+    """
+
+    def run(self, edit):
+        view = self.view
+
+        self.actions = []
+        items = []
+
+        items.append([u'⇤ Go to previous position'])#, view.file_name() + ':89'])
+        self.actions.append(None)
+        items.append([u'⇥ Go to next position'])#, view.file_name() + ':180'])
+        self.actions.append(None)
+        items.append([u'📁 Browse namespaces'])#, ''])
+        self.actions.append((self.command, 'boo_browse_namespaces'))
+        #items.append([u'⇧ Go to parent namespace', 'System'])
+        #items.append([u'⟳ System.Diagnostics', 'Select to reload'])
+
+
+        from .SublimeBoo import _LINTS
+        lints = _LINTS.get(view.id(), {})
+        for line, lint in lints.items():
+            # TODO: Handle column
+            if 'BCE' in lint:
+                lint = u'✖ ' + lint
+            else:
+                lint = u'⚠ ' + lint
+            items.append([lint, '{0}:{1}'.format(view.file_name(), line)])
+            self.actions.append((self.goto, view.file_name(), line + 1))
+
+        from .SublimeBoo import _GLOBALS, symbol_for
+        hints = _GLOBALS.get(view.id(), [])
+        items += [symbol_for(x) + ' ' + x['name'] for x in hints if x['node'] == 'Namespace']
+
+        view.window().show_quick_panel(items, self.on_select)
+
+    def on_select(self, idx):
+        print('Navigate idx', idx)
+        action = self.actions[idx]
+        action[0](*action[1:])
+
+    def goto(self, fname, line = 0, column = 0):
+        self.view.window().open_file(
+            '{0}:{1}:{2}'.format(fname, line, column),
+            sublime.TRANSIENT | sublime.ENCODED_POSITION)
+
+    def command(self, command):
+        sublime.set_timeout(lambda: self.view.window().run_command(command, {}), 1)
 
 
 class BooShowInfoCommand(TextCommand):
@@ -161,11 +308,12 @@ class BooShowInfoCommand(TextCommand):
         if ch == '.':
             return
         elif ch in (' ', ',', '(', ')'):
+            # TODO: use find_open_paren
             # Silly algorithm to detect if we are in the middle of a method call
             # If there are more parens open than closed (unbalanced) remove all the
             # ones balanced.
             line = view.substr(sublime.Region(view.line(ofs).a, ofs))
-            print 'L "%s"' % line
+            print('L "%s"' % line)
             unbalanced = 1
             idx = len(line)
             while unbalanced > 0 and idx > 0:
@@ -189,7 +337,7 @@ class BooShowInfoCommand(TextCommand):
         until = view.word(ofs).b
         code = get_code(view)
         #code = code[0:until] + ' # ' + code[until:]
-        print 'CODE:', code[until-5:until+5]
+        print('CODE:', code[until-5:until+5])
 
         row, col = view.rowcol(ofs)
         resp = server(view).query(
@@ -199,23 +347,18 @@ class BooShowInfoCommand(TextCommand):
             line=row + 1,
             column=col + 1,
             extra=True,
-            params=[True]  # Request all candidate entities based on name
+            params=(True,)  # Request all candidate entities based on name
         )
 
         self.panel = view.window().get_output_panel('boo.info')
 
         if not len(resp['hints']):
-            edit = self.panel.begin_edit()
             self.panel.replace(edit, sublime.Region(0, self.panel.size()), '')
-            self.panel.end_edit(edit)
             self.panel.show(0)
             return
 
-        edit = self.panel.begin_edit()
-
         hint = resp['hints'][0]
         self.panel.insert(edit, self.panel.size(), hint['full'] + ':\n\n')
-
 
         for hint in resp['hints']:
             if hint['node'] == 'Method':
@@ -232,7 +375,6 @@ class BooShowInfoCommand(TextCommand):
             else:
                 self.panel.insert(edit, self.panel.size(), '  ' + hint['node'] + ': ' + hint['info'] + '\n')
 
-        self.panel.end_edit(edit)
         self.panel.show(0)
         self.view.window().run_command('show_panel', {'panel': 'output.boo.info'})
 
@@ -253,9 +395,7 @@ class BooOutlineCommand(TextCommand):
             code=get_code(self.view))
 
         view = self.view.window().get_output_panel('boo.outline')
-        edit = view.begin_edit()
         view.insert(edit, view.size(), '\n'.join(self.render(resp)))
-        view.end_edit(edit)
         view.show(view.size())
         self.view.window().run_command('show_panel', {'panel': 'output.boo.outline'})
 
@@ -281,7 +421,102 @@ class BooOutlineCommand(TextCommand):
         return [('  ' * indent) + ln for ln in lines]
 
 
-class BooGotoDeclarationCommand(TextCommand):
+class BooGoToImports(TextCommand):
+    """ Jumps to the imports section of the current file
+    """
+
+    def run(self, edit):
+        resp = server(self.view).query(
+            command='outline',
+            fname=self.view.file_name(),
+            code=get_code(self.view)
+        )
+
+        imports = [x for x in resp['members'] if x['type'] == 'Import']
+        if len(imports):
+            imports.sort(key=lambda x: x['line'])
+            ln = imports[-1]['line']
+        else:
+            ln = 1
+
+        target = self.view.text_point(ln, 0)
+        self.view.show_at_center(target)
+        self.view.sel().clear()
+        self.view.sel().add(target)
+
+
+class BooGoToError(TextCommand):
+    """ Jumps to next error
+    """
+
+    def run(self, edit, reverse=False):
+        ofs = self.view.sel()[-1].a
+        ln = self.view.rowcol(ofs)[0]
+
+        # TODO: Take column into consideration
+
+        # Get lines with lints
+        from SublimeBoo import _LINTS
+        lines = _LINTS.get(self.view.id(), {}).keys()
+        # Make sure its sorted
+        lines.sort(reverse=reverse)
+
+        for line in lines:
+            if (not reverse and line > ln) or (reverse and line < ln):
+                target = self.view.text_point(line, 1)
+                self.view.show_at_center(target)
+                self.view.sel().clear()
+                self.view.sel().add(target)
+                return
+
+
+class BooGoToEnclosingType(TextCommand):
+    """ Jumps to the enclosing type for the current position
+    """
+
+    def run(self, edit):
+        resp = server(self.view).query(
+            command='outline',
+            fname=self.view.file_name(),
+            code=get_code(self.view)
+        )
+
+        ofs = self.view.sel()[-1].a
+        ln = self.view.rowcol(ofs)[0]
+
+        def extract_types(root):
+            accepted = ('ClassDefinition', 'InterfaceDefinition', 'StructDefinition', 'EnumDefinition')
+            types = []
+            for node in root['members']:
+                if node['type'] in accepted:
+                    types += extract_types(node)
+                    types.append(node)
+            return types
+
+        # Extract all type definitions from the outline
+        types = extract_types(resp)
+        # Sort them from bottom to top
+        types = sorted(types, key=lambda x: x['line'], reverse=True)
+
+        for node in types:
+            if ln > node['line'] and ln <= node['line'] + node['length']:
+                target = self.view.text_point(node['line'], 1)
+                self.view.show_at_center(target)
+                self.view.sel().clear()
+                self.view.sel().add(target)
+                return
+
+
+class BooGoToMain(TextCommand):
+    """ Jumps to the main section of the current project/directory/file
+    """
+
+    def run(self, edit):
+        # TODO
+        pass
+
+
+class BooGoToDeclarationCommand(TextCommand):
     """ Navigate to the declaration for the selected symbol.
         If multiple choices are available a quick panel will be shown to choose
         one of them.
@@ -341,7 +576,7 @@ class BooGotoDeclarationCommand(TextCommand):
 
         def focus():
             if view.is_loading():
-                print 'View not ready yet...'
+                print('View not ready yet...')
                 sublime.set_timeout(focus, 50)
                 return
 
@@ -357,6 +592,7 @@ class BooGotoDeclarationCommand(TextCommand):
                     ofs = line.a + match.start()
                     view.show_at_center(ofs)
                     view.sel().clear()
+                    #view.sel().add(view.word(ofs))
                     view.sel().add(line)
                     return
 

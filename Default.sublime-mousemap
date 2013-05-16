@@ -1,0 +1,19 @@
+[{ 
+	"button": "button1", 
+	"modifiers": ["alt"], 
+	"press_command": "drag_select",
+	"command": "boo_goto_declaration",
+    "context": [
+        {"key": "boo_supported_language"},
+        {"key": "boo_is_code"}
+    ]
+}, {
+	"button": "button2",
+	"modifiers": ["alt"],
+	"press_command": "drag_select",
+	"command": "boo_show_info",
+	"context": [
+		{"key": "boo_supported_language"},
+		{"key": "boo_is_code"}
+	]
+}]

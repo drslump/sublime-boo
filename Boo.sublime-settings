@@ -1,4 +1,12 @@
 {
+    // TODO: This should trigger completion on dot without using a command
+    //"auto_complete_triggers": [{"selector": "source.boo", "characters": "."}]
+    // TODO: Document that this would disable completions while typing
+    //"auto_complete_selector": "-"
+    // TODO: Setup proper selectors needing autocompletion
+    //"auto_complete_selector": "source - comment"
+
+
     // Compiler executable
     "bin": "boojs",
 

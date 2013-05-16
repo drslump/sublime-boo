@@ -1,5 +1,5 @@
 {
 	"cmd": ["booc", "-srcdir:$file_path"],
-	"file_regex": "^[ ]*File \"(...*?)\", line ([0-9]*)",
+	"file_regex": "^([^\\(]+)\\((\\d+),(\\d+)\\):",
 	"selector": "source.boo"
 }

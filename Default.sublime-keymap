@@ -7,15 +7,15 @@
         {"key": "boo_is_code"}
     ]
 }, {
-    "keys": ["super+f3"], 
-    "command": "boo_goto_declaration",
+    "keys": ["alt+space"],
+    "command": "boo_quick_panel_complete",
     "context": [
         {"key": "boo_supported_language"},
         {"key": "boo_is_code"}
     ]
 }, {
-    "keys": ["control+space"],
-    "command": "boo_quick_panel_complete",
+    "keys": ["super+f3"], 
+    "command": "boo_goto_declaration",
     "context": [
         {"key": "boo_supported_language"},
         {"key": "boo_is_code"}

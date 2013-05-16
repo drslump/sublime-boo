@@ -2,10 +2,14 @@ import re
 from os import path
 from glob import glob
 
-from BooHints.server import Server
+from .server import Server
+
 
 # Registry of spawned servers
 _SERVERS = {}
+
+IMPORT_RE = re.compile(r'^import\s+([\w\.]+)?|^from\s+([\w\.]+)?')
+CONTINUATION_RE = re.compile(r'[\\,][\s\r\n]*$')
 
 
 def get_server(cmd, args, fname=None, rsp=None, cwd=None):
@@ -113,10 +117,63 @@ def format_method(hint, format='{name}({params}): {return}', format_param='{name
     return format.format(**data)
 
 
+def find_open_paren(code, open='([{', close=')]}'):
+    """ Looks backwards to check if we are inside some kind of parens. A number
+        of assumptions are made:
+            - Multiple lines are supported if they end with `,` or `\`
+            - Strings and comments must not contain parens
+    """
+    ofs = len(code)
+    unbalanced = 1
+    while unbalanced > 0 and ofs > 0:
+        ofs -= 1
+        char = code[ofs]
+        if char in close:
+            unbalanced += 1
+        elif char in open:
+            unbalanced -= 1
+        elif char == '\n':
+            # Check if the preceding line ends with a continuation character
+            if not CONTINUATION_RE.search(code[max(0, ofs - 10):ofs]):
+                break
+
+    if unbalanced != 0:
+        return None
+
+    return ofs
+
+
+def get_import_namespace(code):
+    """ If the code ends with an import statement returns the target namespace
+        being imported
+    """
+    # Handle explicit symbol imports with the form `import System(IO, Diagnost`
+    ofs = find_open_paren(code, '(', ')')
+    if ofs is None:
+        ofs = len(code)
+
+    # Extract the line where the offset is
+    while ofs > 0 and code[ofs - 1] != '\n':
+        ofs -= 1
+    line = code[ofs:]
+
+    matches = IMPORT_RE.search(line)
+    if not matches:
+        return None
+
+    ns = matches.group(1) or matches.group(2)
+    if not ns:
+        return ''
+
+    return ns.rstrip('.')
+
+
 __all__ = [
     TYPESMAP,
     get_server,
     locate_rsp,
     format_type,
-    format_method
+    format_method,
+    find_open_paren,
+    get_import_namespace,
 ]

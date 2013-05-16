@@ -1,0 +1,58 @@
+[{
+	"caption": "Boo: Navigate",
+	"command": "boo_navigate"
+}, {
+	"caption": "Boo: Add/Remove import",
+	"command": "boo_import"
+}, {
+	"caption": "Boo: GoTo imports",
+	"command": "boo_go_to_imports"
+}, {
+	"caption": "Boo: GoTo to main",
+	"command": "boo_go_to_main"
+}, {
+	"caption": "Boo: Show info for symbol",
+	"command": "boo_show_info"
+}, {
+	"caption": "Boo: GoTo Declaration",
+	"command": "boo_go_to_declaration"
+}, {
+	"caption": "Boo: GoTo Enclosing Type",
+	"command": "boo_go_to_enclosing_type"
+}, {
+	"caption": "Boo: GoTo Previous Error",
+	"command": "boo_go_to_error",
+	"args": {
+		"reverse": true
+	}
+}, {
+	"caption": "Boo: GoTo Next Error",
+	"command": "boo_go_to_error"
+}, {
+	"caption": "Boo: GoTo Imports",
+	"command": "boo_go_to_imports"
+}, {
+	"caption": "Boo: Default Settings",
+	"command": "open_file",
+	"args": {
+		"file": "${packages}/sublime-boo/Boo.sublime-settings"
+	}
+}, {
+	"caption": "Boo: User Settings",
+	"command": "open_file",
+	"args": {
+		"file": "${packages}/User/sublime-boo.sublime-settings"
+	}
+}, {
+	"caption": "Boo: Changes & Announcements",
+	"command": "open_file",
+	"args": {
+		"file": "${packages}/sublime-boo/CHANGELOG.md"
+	}
+}, { 
+	"caption": "Boo: Read Me",
+	"command": "open_file",
+	"args": {
+		"file": "${packages}/sublime-boo/README.mkd"
+	}
+}]

@@ -94,7 +94,10 @@ def server(view):
     args = get_setting('args', [])
     rsp = get_setting('rsp')
 
-    return get_server(cmd, args, rsp=rsp, fname=fname)
+    try:
+        return get_server(cmd, args, rsp=rsp, fname=fname)
+    except FileNotFoundError as ex:
+        logger.error('Error spawning server: %s', ex)
 
 
 def get_setting(key, default=None):
@@ -102,11 +105,19 @@ def get_setting(key, default=None):
         not found it will use the plugin settings file without the prefix
         to find a valid key. If still not found the default is returned.
     """
+    # Obtain settings from user preferences and/or project
     settings = sublime.active_window().active_view().settings()
+
+    # Prefixed like `boo.rsp`
     prefixed = '{0}.{1}'.format('boo', key)
     if settings.has(prefixed):
         return settings.get(prefixed)
 
+    # Inside a section named boo
+    if settings.get('boo', {}).has(key):
+        return settings.get('boo').get(key)
+
+    # Query a custom settings file
     settings = sublime.load_settings('Boo.sublime-settings')
     return settings.get(key, default)
 
@@ -512,7 +523,7 @@ class BooEventListener(sublime_plugin.EventListener):
 
         # Obtain the string from the start of the line until the caret
         line = view.substr(sublime.Region(view.line(offset).a, offset))
-        logger.debug('Line: "%s"', line)
+        #logger.debug('Line: "%s"', line)
 
         # Try to optimize by comparing with the last execution
         last_offset, last_line, last_result = _RESULT.get(vid, (-1, None, None))

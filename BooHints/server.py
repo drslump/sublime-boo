@@ -167,7 +167,7 @@ class Server(object):
     def server_command(self, line):
         """ Answers server commands
         """
-        if line.startswith('REFERENCE_MODIFIED'):
+        if line.startswith('ReferenceModified:'):
             # Force a restart of the server as soon as possible
             self._needs_restart = True
             self.query_async(lambda x: x, 'parse', fname='reload', code='')

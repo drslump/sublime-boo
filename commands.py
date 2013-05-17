@@ -15,7 +15,6 @@ class BooDotCompleteCommand(TextCommand):
     """ Command triggered when the dot key is pressed to show the autocomplete popup
     """
     def run(self, edit):
-        print('BooDot')
         # Insert the dot in the buffer
         for region in self.view.sel():
             self.view.insert(edit, region.end(), ".")
@@ -421,7 +420,7 @@ class BooOutlineCommand(TextCommand):
         return [('  ' * indent) + ln for ln in lines]
 
 
-class BooGoToImports(TextCommand):
+class BooGoToImportsCommand(TextCommand):
     """ Jumps to the imports section of the current file
     """
 
@@ -445,7 +444,7 @@ class BooGoToImports(TextCommand):
         self.view.sel().add(target)
 
 
-class BooGoToError(TextCommand):
+class BooGoToErrorCommand(TextCommand):
     """ Jumps to next error
     """
 
@@ -470,7 +469,7 @@ class BooGoToError(TextCommand):
                 return
 
 
-class BooGoToEnclosingType(TextCommand):
+class BooGoToEnclosingTypeCommand(TextCommand):
     """ Jumps to the enclosing type for the current position
     """
 
@@ -507,7 +506,7 @@ class BooGoToEnclosingType(TextCommand):
                 return
 
 
-class BooGoToMain(TextCommand):
+class BooGoToMainCommand(TextCommand):
     """ Jumps to the main section of the current project/directory/file
     """
 

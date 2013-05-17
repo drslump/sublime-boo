@@ -12,12 +12,12 @@
 
     // List of arguments for the compiler
     // Include "-hints-boo" to enable hints for standard boo instead of boojs
-    "args": [ "-ducky" ],
+    "args": [ ],
 
-    // .rsp file with settings to use by the compiler
+    // .rsp filename with settings to use by the compiler
     // If not set will try to auto discover it in parent directories
     // relative to the source file. Set it to false to disable it.
-    //"rsp": "/path/to/file.rsp",
+    "rsp": "*.rsp",
 
     // Enable the inclusion of default file completions
     "defaults_complete": false,

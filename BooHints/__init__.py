@@ -15,8 +15,9 @@ CONTINUATION_RE = re.compile(r'[\\,][\s\r\n]*$')
 def get_server(cmd, args, fname=None, rsp=None, cwd=None):
     """ Spawn or retrieve a server suitable for the given arguments
     """
-    if rsp is None and fname is not None:
-        rsp = locate_rsp(fname)
+    dirname = path.dirname(path.abspath(fname))
+    if rsp is not None:
+        rsp = locate_rsp(dirname, rsp)
 
     if cwd is None:
         if rsp is not None:
@@ -39,16 +40,14 @@ def reset_servers():
     _SERVERS.clear()
 
 
-def locate_rsp(fname):
+def locate_rsp(dirname, pattern):
     """ Tries to locate an .rsp file in one of the parent directories
     """
-    p = path.dirname(fname)
-    while len(p) > 3:
-        matches = glob('{0}/*.rsp'.format(p))
+    while len(dirname) > 3:
+        matches = glob('{0}/{1}'.format(dirname, pattern))
         if len(matches):
             return matches[0]
-
-        p = path.dirname(p)
+        dirname = path.dirname(dirname)
 
     return None
 

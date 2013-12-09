@@ -8,13 +8,12 @@
 
 
     // Compiler executable
-    "bin": "boojs",
+    "bin": "mono boohints.exe",
 
-    // List of arguments for the compiler
-    // Include "-hints-boo" to enable hints for standard boo instead of boojs
+    // List of arguments for the hints server (ie: -r:path/to/assembly.dll)
     "args": [ ],
 
-    // .rsp filename with settings to use by the compiler
+    // .rsp filename with settings to use by the hints server
     // If not set will try to auto discover it in parent directories
     // relative to the source file. Set it to false to disable it.
     "rsp": "*.rsp",

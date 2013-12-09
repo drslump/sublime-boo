@@ -1,10 +1,11 @@
 # SublimeBoo
 
-Sublime Text 2 plugin to support the Boo language with auto completion.
+Sublime Text 2 and 3 plugin to support the Boo language with auto completion.
 
 ## Features
 
-Interfaces with BooJs compiler to offer compiler assisted auto completion hints.
+Interfaces with [Boo.Hints](https://github.com/drslump/boo.hints) to offer compiler
+assisted auto completion hints.
 
   - Global/Imported symbols
   - Local symbols (ie: function arguments)
@@ -15,6 +16,10 @@ Interfaces with BooJs compiler to offer compiler assisted auto completion hints.
 
 Create a `Boo.sublime-settings` file or include plugin settings prefixed with `boo.`
 in your preferences or project files.
+
+You can also use the excellent [DirectorySettings plugin](https://github.com/davepeck/DirectorySettings)
+to provide a specific configuration for a directory without having to mess
+with Sublime projects.
 
 See the supplied `Boo.sublime-settings` file for the list of available settings.
 

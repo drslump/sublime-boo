@@ -75,7 +75,7 @@
 
 		<dict>
 			<key>match</key>
-			<string>\b(import|from|if|else|elif|unless|for|in|while|continue|break|pass|return|class|interface|def|override|struct|namespace|enum|try|except|ensure|assert|yield|callable|goto|virtual|get|set|of|ref)\b</string>
+			<string>\b(assert|break|block|callable|case|class|continue|def|debug|else|elif|ensure|enum|event|except|for|from|get|goto|if|import|in|interface|lock|macro|match|namespace|new|of|otherwise|override|pass|raise|ref|return|self|set|struct|then|try|unless|unsafe|using|virtual|while|yield)\b</string>
 			<key>name</key>
 			<string>keyword.control.boo</string>
 		</dict>
@@ -183,7 +183,7 @@
 		</dict>
 		<dict>
 			<key>match</key>
-			<string>\b(sbyte|short|int|long|byte|ushort|uint|ulong|single|double|decimal|char|string|bool|object|duck)\b</string>
+			<string>\b(bool|byte|char|date|decimal|double|duck|int|long|object|sbyte|short|single|string|uint|ulong|ushort)\b</string>
 			<key>name</key>
 			<string>storage.type.boo</string>
 		</dict>
@@ -201,13 +201,13 @@
 		</dict>
 		<dict>
 			<key>match</key>
-			<string>\b(print|gets|prompt|join|map|array|matrix|iterator|shellp|shell|shellm|enemurate|range|reversed|zip|cat|typeof)\b</string>
+			<string>\b(print|gets|prompt|join|map|array|len|matrix|iterator|shellp|shell|shellm|enemurate|range|reversed|zip|cat|typeof|sizeof)\b</string>
 			<key>name</key>
 			<string>support.function.builtin.boo</string>
 		</dict>
 		<dict>
 			<key>match</key>
-			<string>\b([a-z_]+[A-Za-z_0-9]*(\s+as\s+([A-Za-z0-9_]+)))\b</string>
+			<string>\b([a-z_]+[A-Za-z0-9_]*(\s+as\s+([A-Za-z0-9_]+)))\b</string>
 			<key>captures</key>
 			<dict>
 				<key>1</key>

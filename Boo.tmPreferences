@@ -9,9 +9,10 @@
 	<key>settings</key>
 	<dict>
 		<key>decreaseIndentPattern</key>
-		<string>^\s*(elif|else|except|ensure|get|set)\b.*:</string>
+		<string>^\s*(elif|else|except|ensure|case|otherwise|or|then)[\s:]</string>
+
 		<key>increaseIndentPattern</key>
-		<string>.+:\s*$</string>
+		<string>^.*:\s*$</string>
 
         <key>cancelCompletion</key>
         <string>^(.*\b(and|or)$)|(\s*(pass|return|and|or|(class|def|import)\s*[a-zA-Z_0-9]+)$)</string>

@@ -25,6 +25,10 @@ def get_server(cmd, args, fname=None, rsp=None, cwd=None):
         elif fname is not None:
             cwd = path.dirname(path.abspath(fname))
 
+    if isinstance(cmd, list) or isinstance(cmd, tuple):
+        args = cmd[1:] + args
+        cmd = cmd[0]
+
     key = (cmd, tuple(args), cwd, rsp)
     if key not in _SERVERS:
         _SERVERS[key] = Server(cmd, args, rsp=rsp, cwd=cwd)
@@ -46,7 +50,8 @@ def locate_rsp(dirname, pattern):
     while len(dirname) > 3:
         matches = glob('{0}/{1}'.format(dirname, pattern))
         if len(matches):
-            return matches[0]
+            # Get the first one sorting without file extension
+            return sorted(matches, key=lambda x: x[:-4].lower())[0]
         dirname = path.dirname(dirname)
 
     return None

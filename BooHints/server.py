@@ -41,6 +41,7 @@ class Server(object):
         self.async_queries = queue.Queue()
         self.lock = threading.Lock()
         self._needs_restart = False
+        self._invalid = False
 
         # Setup threads for reading results and errors
         threading.Thread(target=self.thread_async).start()
@@ -61,18 +62,25 @@ class Server(object):
         args = list(self.args)
         cwd = self.cwd
         if self.rsp:
-            args.append('@{0}'.format(self.rsp))
             cwd = os.path.dirname(self.rsp)
-
-        args.append('-hints-server')
+            # Extract references from rsp
+            with open(self.rsp) as fp:
+                lines = fp.readlines()
+                lines = [ln.strip() for ln in lines]
+                args += [ln for ln in lines if ln.startswith('-r')]
+                args += [ln.replace('-o', '-r') for ln in lines if ln.startswith('-o')]
+                args += [ln for ln in lines if ln.startswith('-ducky')]
+            #args.append('@{0}'.format(self.rsp))
 
         self.proc = subprocess.Popen(
             args,
             cwd=cwd,
-            #shell=True,
+            shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            stdin=subprocess.PIPE
+            stdin=subprocess.PIPE,
+            bufsize=0,
+            close_fds=True
         )
 
         logger.info('Started hint server with PID %s using: %s',
@@ -108,7 +116,11 @@ class Server(object):
             threading.Timer(self.timeout, self.check_timeout).start()
 
     def is_alive(self):
-        return self.proc and self.proc.poll() is None and hasattr(self.proc, 'stdin')
+        alive = self.proc and self.proc.poll() is None and hasattr(self.proc, 'stdin')
+        if not alive:
+            self.reset_queue(self.results)
+            self.reset_queue(self.async_queries)
+        return alive
 
     def thread_stdout(self):
         """ Thread to consume stdout contents """
@@ -122,7 +134,7 @@ class Server(object):
                 continue
             line = line.decode('utf-8')
             line = line.rstrip()
-            if line[0] == '#':
+            if line.startswith('#'):
                 line = line[1:]
                 if line.startswith('!'):
                     self.server_command(line[1:])
@@ -141,20 +153,20 @@ class Server(object):
             line = self.proc.stderr.readline()
             if 0 == len(line):
                 continue
-            line = line.decode('utf-8')                    
+            line = line.decode('utf-8')
             line = line.rstrip()
-            if len(line) and line[0] == '#':
+            if line.startswith('#'):
                 logger.warning(line[1:])
             else:
                 logger.error(line)
-                self.results.put(None)
+                # self.results.put(None)
 
     def thread_async(self):
         """ Thread to perform async queries """
         while True:
             callback, command, kwargs = self.async_queries.get()
             resp = self.query(command, **kwargs)
-            callback(resp)    
+            callback(resp)
 
     def reset_queue(self, queue):
         """ Make sure the queue is empty """
@@ -175,6 +187,10 @@ class Server(object):
             logger.info('Unsupported server command: %s', line)
 
     def query(self, command, **kwargs):
+        if self._invalid:
+            logger.error('Process was flagged as invalid. It ended abnormally.')
+            return None
+
         # Issue the command
         kwargs['command'] = command
         query = json.dumps(
@@ -196,11 +212,14 @@ class Server(object):
             self.proc.stdin.write(query + '\n'.encode('utf-8'))
             resp = None
             try:
-                resp = self.results.get(timeout=5.0)
+                resp = self.results.get(timeout=3.0)
                 if resp is not None:
                     resp = json.loads(resp)
             except queue.Empty as ex:
                 logger.error('Timeout waiting for query response')
+                if not self.is_alive():
+                    self._invalid = True
+                    logger.error('Process terminated abnormally. Disabling it.')
             except Exception as ex:
                 logger.error(str(ex), exc_info=True)
 
@@ -210,10 +229,4 @@ class Server(object):
         """ Runs a query in a separate thread reporting the result via an
             argument to the supplied callback.
         """
-        #def target():
-        #    result = self.query(command, **kwargs)
-        #    callback(result)
-
-        #t = threading.Thread(target=target)
-        #t.start()
         self.async_queries.put((callback, command, kwargs))

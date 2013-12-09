@@ -75,6 +75,8 @@ IGNORED = (
     'ReferenceEquals()\tbool',
 )
 
+# Views initialized
+_INITIALIZED = set()
 # Keeps cached hints for builtin symbols associated to a view id
 _BUILTINS = {}
 # Keeps cached hints for global symbols associated to a view id
@@ -114,7 +116,7 @@ def get_setting(key, default=None):
         return settings.get(prefixed)
 
     # Inside a section named boo
-    if settings.get('boo', {}).has(key):
+    if key in settings.get('boo', {}):
         return settings.get('boo').get(key)
 
     # Query a custom settings file
@@ -141,7 +143,8 @@ def query_locals(view, offset=None):
         code=get_code(view),
         line=line
     )
-    return convert_hints(resp['hints'])
+
+    return convert_hints(resp['hints']) if resp else []
 
 
 def query_complete(view, offset=None, code=None, line=None, skip_globals=True, **kwargs):
@@ -161,6 +164,9 @@ def query_complete(view, offset=None, code=None, line=None, skip_globals=True, *
         line=line,
         params=(skip_globals,),
         **kwargs)
+
+    if not resp:
+        return 'error', []
 
     return resp['scope'], resp['hints']
 
@@ -197,9 +203,15 @@ def convert_hint(hint):
     if node == 'Namespace':
         desc = name
     elif node == 'Type':
-        flags = set(x.strip() for x in info.split(','))
-        flags = flags - set(('class', 'interface', 'struct', 'event', 'value'))
-        desc = '{0}\t{1}'.format(name, ' '.join(flags))
+        if name.endswith('Macro'):
+            name = name[:-5].lower() + ' '
+            desc = '{0}\t{1}'.format(name, 'macro')
+            print(name, desc)
+        else:
+            flags = set(x.strip() for x in info.split(','))
+            flags = flags - set(('class', 'interface', 'struct', 'event', 'value'))
+            desc = '{0}\t{1}'.format(name, ' '.join(flags))
+    # TODO: Is this still being used?
     elif node == 'Macro':
         desc = '{0}\t{1}'.format(name, 'macro')
         name = name + ' '
@@ -220,9 +232,9 @@ def convert_hints(hints):
 
 
 def normalize_hints(hints):
-    # Remove ignored and duplicates (overloads are not shown for autocomplete)
+    # Remove duplicates
     seen = set()
-    #hints = [x for x in hints if x[1] not in IGNORED and x[1] not in seen and not seen.add(x[1])]
+    hints = [x for x in hints if x[1] not in seen and not seen.add(x[1])]
 
     # Sort by symbol
     hints.sort(key=lambda x: x[1])
@@ -239,7 +251,8 @@ def query_async(callback, view, command, delay=0, **kwargs):
     def wrapper(result):
         # We need to route the actual callback via set_timeout
         # since it's the only sublime API which is thread safe
-        sublime.set_timeout(lambda: callback(result), delay)
+        if result:
+            sublime.set_timeout(lambda: callback(result), delay)
 
     server(view).query_async(wrapper, command, **kwargs)
 
@@ -266,14 +279,16 @@ def refresh_globals(view, delay=0):
     def callback(result):
         _GLOBALS[view.id()] = result['hints']
 
-    if get_setting('globals_complete'):
-        query_async(
-            callback,
-            view,
-            'globals',
-            delay=delay,
-            fname=view.file_name(),
-            code=get_code(view))
+    if not get_setting('globals_complete'):
+        return
+
+    query_async(
+        callback,
+        view,
+        'globals',
+        delay=delay,
+        fname=view.file_name(),
+        code=get_code(view))
 
 
 def refresh_lint(view, delay=0):
@@ -306,8 +321,6 @@ def refresh_lint(view, delay=0):
         process(_LINTS[view_id], result, 'warnings', 'dot')
         process(_LINTS[view_id], result, 'errors', 'circle')
 
-        #update_status(view)
-
     query_async(
         callback,
         view,
@@ -320,87 +333,96 @@ def refresh_lint(view, delay=0):
 
 # TODO: This should be run at a fixed interval to avoid computing the offset
 #       each time we move the cursor.
-CACHE = {'last_offset': -1, 'last_change': None}
-def update_status(view):
+STATUS_CACHE = {
+    'view': -1,
+    'offset': -1,
+}
+
+
+def update_status():
+    """ Update the status bar at a fixed interval
+    """
+    view = sublime.active_window().active_view()
+    if view and view.id() in _INITIALIZED:
+        if view.id() != STATUS_CACHE['view']:
+            view.erase_status('boo.lint')
+            view.erase_status('boo.sign')
+            STATUS_CACHE['offset'] = -1
+        STATUS_CACHE['view'] = view.id()
+
+        # Only process if we are not selecting text
+        sel = view.sel()
+        if len(sel) == 1 and sel[0].a == sel[0].b:
+            render_status(view, sel[0].a)
+
+    sublime.set_timeout(update_status, 700)
+
+
+def render_status(view, ofs):
     """ Updates the status bar with parser hints
     """
-    sel = view.sel()
-    # Nothing to do if we have multiple selections
-    if len(sel) > 1:
-        return
-    sel = sel[0]
-    # Nothing to do if we are selecting text
-    if sel.a != sel.b:
-        return
-
-    ofs = sel.a
-
     # Apply linting information
     lints = _LINTS.get(view.id(), {})
-    ln = view.rowcol(ofs)[0]
-    if ln in lints:
-        view.set_status('boo.lint', lints[ln])
+    row, col = view.rowcol(ofs)
+    if row in lints:
+        view.set_status('boo.lint', lints[row])
     else:
         view.erase_status('boo.lint')
 
-    # TODO: Use syntax identifiers to discard the operation for keywords/strings/comments?
+    # Use syntax scopes to quickly discard looking for a signature
+    if view.score_selector(ofs, 'comment, string, constant, keyword') > 0:
+        view.erase_status('boo.sign')
+        return
+
+    # Find the entity under the cursor
+    if view.substr(ofs) in (' ', ',', '(', ')'):
+        # Try to find the entity in a call or slicing expression
+        ofs = find_open_paren(view.substr(sublime.Region(0, ofs)), open='([', close=')]')
+        if not ofs:
+            view.erase_status('boo.sign')
+            return
+
+    # Get the start position of the entity
+    ofs = view.word(ofs).a
+    if not view.substr(view.word(ofs)).isalnum():
+        view.erase_status('boo.sign')
+        return
+
+    # If we are at the same point just exit
+    if ofs == STATUS_CACHE['offset']:
+        return
+
+    STATUS_CACHE['offset'] = ofs
 
     def callback(resp):
         if not len(resp['hints']):
-            view.erase_status('boo.signature')
+            view.erase_status('boo.sign')
             return
 
         hint = resp['hints'][0]
         if hint['node'] == 'Method':
             sign = format_method(hint, symbol_for(hint) + ' ({params}): {return}', '{name}: {type}')
-            view.set_status('boo.signature', sign)
+            view.set_status('boo.sign', sign)
         elif hint['node'] in ('Namespace', 'Type'):
-            view.set_status('boo.signature', symbol_for(hint) + ' ' + hint['full'])
+            view.set_status('boo.sign', '{0} {1}'.format(symbol_for(hint), hint['full']))
         else:
-            view.set_status('boo.signature', symbol_for(hint) + ' ' + hint['type'])
+            view.set_status('boo.sign', '{0} {1}'.format(symbol_for(hint), hint.get('type')))
 
-    ch = view.substr(ofs)
-    word = view.substr(view.word(ofs)).rstrip('\r\n')
-    if ch == '.':
-        view.erase_status('boo.signature')
-        return
-    elif ch in (' ', ',', '(', ')'):
-        idx = find_open_paren(view.substr(sublime.Region(0, ofs)), open='([', close=')]')
-        if idx is None:
-            view.erase_status('boo.signature')
-            return
-        ofs = view.word(idx).a
-    elif word.isalnum() and word not in ('if', 'elif', 'else', 'for', 'while', 'try', 'except', 'ensure', 'def', 'class', 'struct', 'interface', 'continue', 'return', 'yield', 'true', 'false', 'null', 'in', 'of'):
-        ofs = view.word(ofs).a
-
-    else:
-        view.erase_status('boo.signature')
-        return
-
-    if ofs != CACHE['last_offset']:
-        logger.debug('Caching last offset')
-        CACHE['last_offset'] = ofs
-        CACHE['last_change'] = time.time()
-        #sublime.set_timeout(lambda: update_status(view), 300)
-    else:
-        if CACHE['last_change'] and time.time() - CACHE['last_change'] > 0.25:
-            CACHE['last_change'] = None
-            logger.debug('Updating status')
-            row, col = view.rowcol(ofs)
-            query_async(
-                callback,
-                view,
-                'entity',
-                fname=view.file_name(),
-                code=get_code(view),
-                line=row + 1,
-                column=col + 1,
-                extra=True
-            )
+    row, col = view.rowcol(ofs)
+    query_async(
+        callback,
+        view,
+        'entity',
+        fname=view.file_name(),
+        code=get_code(view),
+        line=row + 1,
+        column=col + 1,
+        extra=True
+    )
 
 
 def is_supported_language(view):
-    if view.is_scratch():
+    if view.is_scratch() or not view.file_name():
         return False
 
     caret = view.sel()[0].a
@@ -412,10 +434,9 @@ def is_supported_language(view):
 class BooEventListener(sublime_plugin.EventListener):
 
     def __init__(self):
-        self._initialized = set()
-
         # Hack: We use the constructor to detect when the plugin reloads
         reset_servers()
+        _INITIALIZED.clear()
         _LINTS.clear()
         _GLOBALS.clear()
         _RESULT.clear()
@@ -439,25 +460,18 @@ class BooEventListener(sublime_plugin.EventListener):
         # used on_load we may stall the editor when it's started with a
         # lot of files
         def initialize():
-            if view.id() in self._initialized:
+            if view.id() in _INITIALIZED:
                 return
             if view.is_loading():
                 sublime.set_timeout(initialize, 100)
                 return
             elif is_supported_language(view):
                 logger.debug('Initializing view %d', view.id())
-                self._initialized.add(view.id())
+                _INITIALIZED.add(view.id())
 
                 refresh_builtins(view)
                 refresh_globals(view)
                 refresh_lint(view)
-
-                def refresh_status():
-                    update_status(view)
-                    sublime.set_timeout(refresh_status, 500)
-
-                #refresh_status()
-
 
         initialize()
 
@@ -486,17 +500,6 @@ class BooEventListener(sublime_plugin.EventListener):
             del _LINTS[view_id]
         if view_id in _RESULT:
             del _RESULT[view_id]
-
-    def on_selection_modified(self, view):
-        """ Every time we move the cursor we update the status
-        """
-        if not is_supported_language(view):
-            return
-
-        # TODO: Obtain here the valid offset
-        #       Update lint info if line has changed
-        #       Set a short timeout, if it changed update entity (configurable)
-        #update_status(view)
 
     def on_query_completions(self, view, prefix, locations):
 
@@ -552,3 +555,7 @@ class BooEventListener(sublime_plugin.EventListener):
 
         hints = convert_hints(hints)
         return prepare_result(offset, hints)
+
+
+# Initialize the status updater
+update_status()
